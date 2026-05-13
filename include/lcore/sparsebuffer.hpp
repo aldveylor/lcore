@@ -93,36 +93,44 @@ public:
     inline constexpr bool has_data(size_type pos) const {
         return get_chunk(pos) != nullptr;
     }
-    // /// @brief Read data from the sparse buffer, return the number of bytes read
-    // inline constexpr std::size_t read(Span<T> buffer, size_type pos) const {
-    //     if (buffer.empty()) return 0;
-    //     size_type read = 0;
-    //     size_type buffer_size = buffer.size();
-    //     while (read < buffer_size) {
-    //         auto it = chunks.upper_bound(pos + read);
-    //         if (it == chunks.begin()) {
-    //             // No more chunks to read
-    //             if (buffer_size - read > 0) {
-    //                 std::fill_n(buffer.data() + read, buffer_size - read, T{});
-    //                 read += buffer_size - read;
-    //             }
-    //             break;
-    //         }
-    //         --it;
-    //         if (!it->second.contains(pos + read)) {
-    //             // Empty space, read as zero
-    //             size_type empty_size = std::min(buffer_size - read, it->first - (pos + read));
-    //             std::fill_n(buffer.data() + read, empty_size, T{});
-    //             read += empty_size;
-    //             continue;
-    //         }
-    //         // Read from existing chunk
-    //         size_type chunk_read = std::min(buffer_size - read, it->second.endat() - (pos + read));
-    //         std::copy_n(&it->second[pos + read], chunk_read, buffer.data() + read);
-    //         read += chunk_read;
-    //     }
-    //     return read;
-    // }
+    /// @brief Read data from the sparse buffer, return the number of bytes read
+    inline constexpr std::size_t read(size_type pos, Span<T> buffer) const {
+        if (buffer.empty()) return 0;
+        size_type read = 0;
+        size_type buffer_size = buffer.size();
+        while (read < buffer_size && pos + read < total_size) {
+            auto it = chunks.upper_bound(pos + read);
+            if (it == chunks.begin()) {
+                // A empty space before the first chunk, read as zero
+                size_type empty_size = std::min(buffer_size - read, it->first - (pos + read));
+                std::fill_n(buffer.data() + read, empty_size, T{});
+                read += empty_size;
+                continue;
+            }
+            --it;
+            if (it->second.contains(pos + read)) {    
+                // Read from existing chunk
+                size_type chunk_read = std::min(buffer_size - read, it->second.endat() - (pos + read));
+                std::copy_n(&it->second[pos + read], chunk_read, buffer.data() + read);
+                read += chunk_read;
+            }
+            // Empty space, read as zero until the next chunk
+            ++it;
+            if (it == chunks.end()) {
+                // A empty space after the last chunk, read as zero or until the end of the buffer
+                size_type empty_size = std::min(buffer_size - read, total_size - (pos + read));
+                std::fill_n(buffer.data() + read, empty_size, T{});
+                read += empty_size;
+                continue;
+            }
+            // A empty space between two chunks, read as zero until the next chunk
+            size_type empty_size = std::min(buffer_size - read, it->first - (pos + read));
+            std::fill_n(buffer.data() + read, empty_size, T{});
+            read += empty_size;
+            continue;
+        }
+        return read;
+    }
     /// @brief Allocate a range of the sparse buffer, return a span of the allocated range, if the range is already allocated, return the existing range
     inline constexpr Span<T> alloc(size_type pos, size_type size) {
         if (size == 0) return {};

@@ -255,6 +255,7 @@ public:
     inline constexpr const_reverse_iterator crend() const { return const_reverse_iterator(begin_); }
 
     inline constexpr value_type* data() { return begin_; }
+    inline constexpr const value_type* data() const { return begin_; }
     inline constexpr size_t size() const { return std::distance(begin_, end_); }
     inline constexpr bool empty() const { return begin_ == end_; }
 
@@ -348,6 +349,7 @@ public:
     inline constexpr const_reverse_iterator crbegin() const { return const_reverse_iterator(end_); }
     inline constexpr const_reverse_iterator crend() const { return const_reverse_iterator(begin_); }
 
+    inline constexpr const value_type* data() const { return begin_; }
     inline constexpr size_t size() const { return std::distance(begin_, end_); }
     inline constexpr bool empty() const { return begin_ == end_; }
 
