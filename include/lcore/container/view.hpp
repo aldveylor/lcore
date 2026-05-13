@@ -1,5 +1,4 @@
 #pragma once
-#include "lcore/base.hpp"
 #include "lcore/traits.hpp"
 #include "lcore/assert.hpp"
 #include <vector>
@@ -37,7 +36,13 @@ public:
 private:
     iterator begin_;
     iterator end_;
+
+    Container<T>& GetStaticEmptyContainer() requires DefaultConstructible<Container<T>> {
+        static Container<T> container;
+        return container;
+    }
 public:
+    inline ContainerView(): begin_(GetStaticEmptyContainer().begin()), end_(GetStaticEmptyContainer().end()) {};
     inline ContainerView(Container<T>& container): begin_(container.begin()), end_(container.end()){};
     inline ContainerView(iterator begin, iterator end): begin_(begin), end_(end){};
 
@@ -78,16 +83,19 @@ public:
         return *std::next(begin_, index);
     }
 
-    inline view_type slice(size_t start, size_t end) const {
-        return view_type(std::next(begin_, start), std::prev(begin_, end));
-    }
-
     inline view_type slice(size_t start) const{
         return view_type(std::next(begin_, start), end_);
     }
 
-    inline view_type subview(size_t start, size_t n = (size_t)-1) const {
-        if (n == (size_t)-1) return view_type(std::next(begin_, start), end_);
+    inline view_type slice(size_t start, size_t end) const {
+        return view_type(std::next(begin_, start), std::prev(begin_, end));
+    }
+
+    inline view_type subview(size_t start) const {
+        return view_type(std::next(begin_, start), end_);
+    }
+
+    inline view_type subview(size_t start, size_t n) const {
         return view_type(std::next(begin_, start), std::next(begin_, start + n));
     }
     
@@ -131,7 +139,12 @@ private:
     const_iterator begin_;
     const_iterator end_;
 
+    const Container<T>& GetStaticEmptyContainer() requires DefaultConstructible<Container<T>> {
+        static Container<T> container;
+        return container;
+    }
 public:
+    inline ConstContainerView(): begin_(GetStaticEmptyContainer().begin()), end_(GetStaticEmptyContainer().end()) {};
     inline ConstContainerView(const Container<T>& container): begin_(container.begin()), end_(container.end()){};
     inline ConstContainerView(const_iterator begin, const_iterator end): begin_(begin), end_(end){};
 
@@ -172,16 +185,19 @@ public:
         return *std::next(begin_, index);
     }
 
-    inline view_type slice(size_t start, size_t end) const {
-        return view_type(std::next(begin_, start), std::prev(begin_, end));
-    }
-
     inline view_type slice(size_t start) const{
         return view_type(std::next(begin_, start), end_);
     }
 
-    inline view_type subview(size_t start, size_t n = (size_t)-1) const {
-        if (n == (size_t)-1) return view_type(std::next(begin_, start), end_);
+    inline view_type slice(size_t start, size_t end) const {
+        return view_type(std::next(begin_, start), std::prev(begin_, end));
+    }
+
+    inline view_type subview(size_t start) const {
+        return view_type(std::next(begin_, start), end_);
+    }
+
+    inline view_type subview(size_t start, size_t n) const {
         return view_type(std::next(begin_, start), std::next(begin_, start + n));
     }
     
@@ -238,6 +254,7 @@ public:
     inline constexpr const_reverse_iterator crbegin() const { return const_reverse_iterator(end_); }
     inline constexpr const_reverse_iterator crend() const { return const_reverse_iterator(begin_); }
 
+    inline constexpr value_type* data() { return begin_; }
     inline constexpr size_t size() const { return std::distance(begin_, end_); }
     inline constexpr bool empty() const { return begin_ == end_; }
 
@@ -262,16 +279,19 @@ public:
         return *std::next(begin_, index);
     }
 
-    inline constexpr view_type slice(size_t start, size_t end) const {
-        return view_type(std::next(begin_, start), std::prev(begin_, end));
-    }
-
     inline constexpr view_type slice(size_t start) const{
         return view_type(std::next(begin_, start), end_);
     }
 
-    inline constexpr view_type subview(size_t start, size_t n = (size_t)-1) const {
-        if (n == (size_t)-1) return view_type(std::next(begin_, start), end_);
+    inline constexpr view_type slice(size_t start, size_t end) const {
+        return view_type(std::next(begin_, start), std::prev(begin_, end));
+    }
+
+    inline constexpr view_type subview(size_t start) const {
+        return view_type(std::next(begin_, start), end_);
+    }
+
+    inline constexpr view_type subview(size_t start, size_t n) const {
         return view_type(std::next(begin_, start), std::next(begin_, start + n));
     }
 
@@ -351,17 +371,20 @@ public:
     inline constexpr const T& operator[](size_t index) const {
         return *std::next(begin_, index);
     }
-
+    
+    inline constexpr view_type slice(size_t start) const{
+        return view_type(std::next(begin_, start), end_);
+    }
+    
     inline constexpr view_type slice(size_t start, size_t end) const {
         return view_type(std::next(begin_, start), std::prev(begin_, end));
     }
 
-    inline constexpr view_type slice(size_t start) const{
+    inline constexpr view_type subview(size_t start) const {
         return view_type(std::next(begin_, start), end_);
     }
 
-    inline constexpr view_type subview(size_t start, size_t n = (size_t)-1) const {
-        if (n == (size_t)-1) return view_type(std::next(begin_, start), end_);
+    inline constexpr view_type subview(size_t start, size_t n) const {
         return view_type(std::next(begin_, start), std::next(begin_, start + n));
     }
 
@@ -510,14 +533,16 @@ public:
     inline constexpr const T& operator[](size_t index) const {
         return *reinterpret_cast<const T*>(reinterpret_cast<const char*>(begin_) + index * stride_);
     }
-    inline constexpr view_type slice(size_t start, size_t end) const {
-        return view_type(reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + start * stride_), reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + end * stride_), stride_);
-    }
     inline constexpr view_type slice(size_t start) const{
         return view_type(reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + start * stride_), end_, stride_);
     }
-    inline constexpr view_type subview(size_t start, size_t n = (size_t)-1) const {
-        if (n == (size_t)-1) return view_type(reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + start * stride_), end_, stride_);
+    inline constexpr view_type slice(size_t start, size_t end) const {
+        return view_type(reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + start * stride_), reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + end * stride_), stride_);
+    }
+    inline constexpr view_type subview(size_t start) const {
+        return view_type(reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + start * stride_), end_, stride_);
+    }
+    inline constexpr view_type subview(size_t start, size_t n) const {
         return view_type(reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + start * stride_), reinterpret_cast<T*>(reinterpret_cast<char*>(begin_) + (start + n) * stride_), stride_);
     }
     template <typename Func>

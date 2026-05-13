@@ -2,6 +2,7 @@
 #include "base.hpp"
 #include "traits.hpp"
 #include "exception.hpp"
+#include "rawptr.hpp"
 #include <atomic>
 #include <memory>
 
@@ -552,7 +553,7 @@ template <typename T, typename... Args>
 inline SharedPtr<T> MakePtr(Args&&... args) {
     // return SharedPtr<T>(new T(std::forward<Args>(args)...));
     struct CbWithT: public detail::ControlBlockBase<> {
-        char mem[sizeof(T)];
+        alignas(T) unsigned char mem[sizeof(T)];
         
         CbWithT(Args&&... args) {
             new (mem) T(std::forward<Args>(args)...); // Placement new to construct T in the memory

@@ -1,9 +1,7 @@
 #pragma once
-#include "base.hpp"
 #include <map>
 #include <vector>
-#include <functional>
-#include <span>
+#include "container/view.hpp"
 
 LCORE_NAMESPACE_BEGIN
 
@@ -95,21 +93,62 @@ public:
     inline constexpr bool has_data(size_type pos) const {
         return get_chunk(pos) != nullptr;
     }
-    /// @brief Read data from the sparse buffer, return a span of the data read
-    inline constexpr std::span<const T> read(size_type pos, size_type size) const {
+    // /// @brief Read data from the sparse buffer, return the number of bytes read
+    // inline constexpr std::size_t read(Span<T> buffer, size_type pos) const {
+    //     if (buffer.empty()) return 0;
+    //     size_type read = 0;
+    //     size_type buffer_size = buffer.size();
+    //     while (read < buffer_size) {
+    //         auto it = chunks.upper_bound(pos + read);
+    //         if (it == chunks.begin()) {
+    //             // No more chunks to read
+    //             if (buffer_size - read > 0) {
+    //                 std::fill_n(buffer.data() + read, buffer_size - read, T{});
+    //                 read += buffer_size - read;
+    //             }
+    //             break;
+    //         }
+    //         --it;
+    //         if (!it->second.contains(pos + read)) {
+    //             // Empty space, read as zero
+    //             size_type empty_size = std::min(buffer_size - read, it->first - (pos + read));
+    //             std::fill_n(buffer.data() + read, empty_size, T{});
+    //             read += empty_size;
+    //             continue;
+    //         }
+    //         // Read from existing chunk
+    //         size_type chunk_read = std::min(buffer_size - read, it->second.endat() - (pos + read));
+    //         std::copy_n(&it->second[pos + read], chunk_read, buffer.data() + read);
+    //         read += chunk_read;
+    //     }
+    //     return read;
+    // }
+    /// @brief Allocate a range of the sparse buffer, return a span of the allocated range, if the range is already allocated, return the existing range
+    inline constexpr Span<T> alloc(size_type pos, size_type size) {
+        if (size == 0) return {};
         auto chunk = get_chunk(pos);
-        if (!chunk) return {};
-        size_type read_size = std::min(size, chunk->endat() - pos);
-        return std::span<const T>(&(*chunk)[pos], read_size);
-    }
-    inline constexpr std::span<T> read(size_type pos, size_type size) {
-        auto chunk = get_chunk(pos);
-        if (!chunk) return {};
-        size_type read_size = std::min(size, chunk->endat() - pos);
-        return std::span<T>(&(*chunk)[pos], read_size);
+        if (chunk && chunk->contains(pos + size - 1)) {
+            // The requested range is already allocated
+            return Span<T>(&(*chunk)[pos], size);
+        }
+        // Allocate a new chunk
+        size_type chunk_size = size;
+        auto it = chunks.upper_bound(pos);
+        if (it != chunks.end()) {
+            chunk_size = std::max(chunk_size, it->first - pos);
+        }
+        Chunk new_chunk(pos, chunk_size);
+        auto [insert_it, inserted] = chunks.emplace(pos, std::move(new_chunk));
+        if (!inserted) {
+            // This should not happen, but just in case
+            return {};
+        }
+        total_size = std::max(total_size, pos + chunk_size);
+        merge_chunks();
+        return Span<T>(insert_it->second.data.data(), size);
     }
     /// @brief Write data to the sparse buffer, return the number of bytes written
-    inline constexpr size_type write(size_type pos, std::span<const T> data) {
+    inline constexpr size_type write(size_type pos, Span<const T> data) {
         if (data.empty()) return 0;
         size_type written = 0;
         size_type data_size = data.size();
@@ -142,7 +181,7 @@ public:
         return written;
     }
     /// @brief Write data to the sparse buffer, without overwriting existing data, return the number of bytes written
-    inline constexpr size_type write_sparse(size_type pos, std::span<const T> data) {
+    inline constexpr size_type write_sparse(size_type pos, Span<const T> data) {
         if (data.empty()) return 0;
         size_type written = 0;
         size_type data_size = data.size();
