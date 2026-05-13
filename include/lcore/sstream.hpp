@@ -201,7 +201,7 @@ public:
         this->buffer.current = this->buffer.begin + newPos;
         return newPos;
     }
-    std::streamsize SPutN(const CharType* s, std::streamsize n) {
+    std::streamsize SPutN(const CharType* s, std::streamsize n) override {
         if (this->buffer.current + n > this->buffer.end) {
             // Not enough space, reallocate
             this->_buffer->ReAlloc(this->buffer.current - this->buffer.begin + n + 1);

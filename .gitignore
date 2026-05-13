@@ -21,3 +21,6 @@ include/lcore/config.h
 
 # tools python env
 **/.env/
+
+# clang
+.cache

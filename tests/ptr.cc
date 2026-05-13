@@ -279,7 +279,8 @@ TEST(PointerTest, SharedFromThis) {
     ptr.Reset(); // Reset the original pointer
     sharedPtr.Reset(); // Reset the shared pointer
 
-    SharedPtr<Base> basePtr(new EnableSharedFromThisDerived(300));
+    // SharedPtr<Base> basePtr(new EnableSharedFromThisDerived(300));
+    auto basePtr = New<EnableSharedFromThisDerived>(300);
     EXPECT_TRUE(basePtr);
     EXPECT_EQ(basePtr.Cast<EnableSharedFromThisTest>()->value, 300);
 

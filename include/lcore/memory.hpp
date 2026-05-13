@@ -200,7 +200,13 @@ class SharedPtr {
 protected:
     RawPtr<T> m_tptr;
     RawPtr<detail::ControlBlockBase<>> m_cb = nullptr;
-    inline SharedPtr(RawPtr<T> tptr, RawPtr<detail::ControlBlockBase<>> cb): m_tptr(tptr), m_cb(cb) { if (cb) m_cb->Ref(); }
+    inline SharedPtr(RawPtr<T> tptr, RawPtr<detail::ControlBlockBase<>> cb): m_tptr(tptr), m_cb(cb) {
+        if (cb) m_cb->Ref();
+        if constexpr (detail::ExtractEnableSharedFromThis<T>::value) {
+            using Extract = ExtractEnableSharedFromThis<T>;
+            tptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
+        }
+    }
 public:
     // Types
     using Type = T;
