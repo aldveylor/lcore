@@ -63,8 +63,9 @@ public:
     //     static_assert(!Void<T>, "Cannot dereference a void pointer");
     // }
 
-    // Bool conversion
+    // Conversion
     inline constexpr operator bool() const noexcept {return ptr != nullptr;}
+    inline constexpr operator T*() const noexcept {return ptr;}
 
     // Pointer comparison
     inline constexpr auto operator<=>(const RawPtr<T>& other) const noexcept {

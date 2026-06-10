@@ -200,12 +200,17 @@ class SharedPtr {
 protected:
     RawPtr<T> m_tptr;
     RawPtr<detail::ControlBlockBase<>> m_cb = nullptr;
-    inline SharedPtr(RawPtr<T> tptr, RawPtr<detail::ControlBlockBase<>> cb): m_tptr(tptr), m_cb(cb) {
-        if (cb) m_cb->Ref();
+    inline void CheckEnableSharedFromThis() {
         if constexpr (detail::ExtractEnableSharedFromThis<T>::value) {
             using Extract = ExtractEnableSharedFromThis<T>;
-            tptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
+            m_tptr.template ConstCast<RemoveCV<T>>().
+                template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(
+                    m_tptr.template ConstCast<RemoveCV<T>>().template Cast<Extract>(), m_cb);
         }
+    }
+
+    inline SharedPtr(RawPtr<T> tptr, RawPtr<detail::ControlBlockBase<>> cb): m_tptr(tptr), m_cb(cb) {
+        if (cb) m_cb->Ref(); CheckEnableSharedFromThis();
     }
 public:
     // Types
@@ -214,55 +219,34 @@ public:
     inline constexpr SharedPtr() = default;
     inline constexpr SharedPtr(std::nullptr_t): m_tptr(nullptr), m_cb(nullptr) {}
 
-    inline constexpr SharedPtr(RawPtr<T> ptr): m_tptr(ptr), m_cb(new detail::ControlBlock<T>(ptr)) {
-        if constexpr (detail::ExtractEnableSharedFromThis<T>::value){
-            using Extract = ExtractEnableSharedFromThis<T>;
-            // If T is derived from EnableSharedFromThis, we need to set the weak pointer
-            ptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
-        }
-    }
+    inline constexpr SharedPtr(RawPtr<T> ptr): m_tptr(ptr), m_cb(new detail::ControlBlock<T>(ptr)) { CheckEnableSharedFromThis(); }
     template <typename Deleter>
     requires InvokeAble<Deleter, T*>
     inline constexpr SharedPtr(RawPtr<T> ptr, Deleter deleter): m_tptr(ptr), m_cb(new detail::ControlBlockDeleter<T, Deleter>(ptr, std::move(deleter))) {
-        if constexpr (detail::ExtractEnableSharedFromThis<T>::value) {
-            using Extract = ExtractEnableSharedFromThis<T>;
-            ptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
-        }
+        CheckEnableSharedFromThis();
     }
     template <typename Deleter, typename Allocator>
     requires InvokeAble<Deleter, T*>
     inline constexpr SharedPtr(RawPtr<T> ptr, Deleter deleter, Allocator allocator)
         : m_tptr(ptr), m_cb(new detail::ControlBlockDeleterAllocator<T, Deleter, Allocator>(ptr, std::move(deleter), std::move(allocator))) {
-            if constexpr (detail::ExtractEnableSharedFromThis<T>::value){
-                using Extract = ExtractEnableSharedFromThis<T>;
-                ptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
-            }
-        }
+            CheckEnableSharedFromThis();
+    }
     
     template <typename U>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
     inline constexpr SharedPtr(RawPtr<U> ptr): m_tptr(ptr.template Cast<T>()), m_cb(new detail::ControlBlock<U>(m_tptr.template Cast<U>())) {
-        if constexpr (detail::ExtractEnableSharedFromThis<U>::value) {
-            using Extract = ExtractEnableSharedFromThis<U>;
-            ptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
-        }
+        CheckEnableSharedFromThis();
     }
     template <typename U, typename Deleter>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
     inline constexpr SharedPtr(RawPtr<U> ptr, Deleter deleter): m_tptr(ptr.template Cast<T>()), m_cb(new detail::ControlBlockDeleter<U, Deleter>(m_tptr.template Cast<U>(), std::move(deleter))) {
-        if constexpr (detail::ExtractEnableSharedFromThis<U>::value){
-            using Extract = ExtractEnableSharedFromThis<U>;
-            ptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
-        }
+        CheckEnableSharedFromThis();
     }
     template <typename U, typename Deleter, typename Allocator>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
     inline constexpr SharedPtr(RawPtr<U> ptr, Deleter deleter, Allocator allocator)
         : m_tptr(ptr.template Cast<T>()), m_cb(new detail::ControlBlockDeleterAllocator<U, Deleter, Allocator>(m_tptr.template Cast<U>(), std::move(deleter), std::move(allocator))) {
-            if constexpr (detail::ExtractEnableSharedFromThis<U>::value){
-                using Extract = ExtractEnableSharedFromThis<U>;
-                ptr.template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(m_tptr.template Cast<Extract>(), m_cb);
-            }
+            CheckEnableSharedFromThis();
     }
 
     template <typename U>

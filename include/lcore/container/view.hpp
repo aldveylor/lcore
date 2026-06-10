@@ -78,9 +78,15 @@ public:
     inline T& operator[](size_t index){
         return *std::next(begin_, index);
     }
-
     inline const T& operator[](size_t index) const {
         return *std::next(begin_, index);
+    }
+
+    inline bool operator==(const ContainerView& other) const {
+        return std::equal(begin_, end_, other.begin_, other.end_);
+    }
+    inline bool operator!=(const ContainerView& other) const {
+        return !(*this == other);
     }
 
     inline view_type slice(size_t start) const{
@@ -180,9 +186,15 @@ public:
     // inline T& operator[](size_t index){
     //     return *std::next(begin_, index);
     // }
-
     inline const T& operator[](size_t index) const {
         return *std::next(begin_, index);
+    }
+
+    inline bool operator==(const ConstContainerView& other) const {
+        return std::equal(begin_, end_, other.begin_, other.end_);
+    }
+    inline bool operator!=(const ConstContainerView& other) const {
+        return !(*this == other);
     }
 
     inline view_type slice(size_t start) const{
