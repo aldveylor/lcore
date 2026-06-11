@@ -347,6 +347,7 @@ public:
     inline constexpr Span(const T (&arr)[N]): begin_(arr), end_(arr + N){};
     template <std::size_t N>
     inline constexpr Span(const std::array<T, N>& arr): begin_(arr.data()), end_(arr.data() + N){};
+    inline constexpr Span(const Span<T>& span): begin_(span.begin()), end_(span.end()){};
 
     // inline constexpr iterator begin() { return begin_; }
     // inline constexpr iterator end() { return end_; }

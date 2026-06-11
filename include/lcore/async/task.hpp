@@ -173,7 +173,7 @@ private:
 template <typename T>
 class AwaitableBase: public Interface {
     bool await_ready() {return false;};
-    bool await_suspend(std::coroutine_handle<> handle) {return false;};
+    bool await_suspend(std::coroutine_handle<>) {return false;};
     T await_resume() {return T{};};
 };
 
@@ -206,9 +206,12 @@ public:
         }
         return *this;
     }
-
-    ~Task() {
-        if(handle) handle.destroy();
+    
+    std::coroutine_handle<PromiseType> get_handle() const {
+        return handle;
+    }
+    operator std::coroutine_handle<>() const {
+        return handle;
     }
 
     auto operator co_await() && noexcept {
@@ -226,6 +229,10 @@ public:
             }
         };
         return awaiter{handle};
+    }
+
+    ~Task() {
+        if(handle) handle.destroy();
     }
 
     const T& ref_value() const & {
@@ -270,8 +277,11 @@ public:
         return *this;
     }
 
-    ~Task() {
-        if(handle) handle.destroy();
+    std::coroutine_handle<PromiseType> get_handle() const {
+        return handle;
+    }
+    operator std::coroutine_handle<>() const {
+        return handle;
     }
 
     auto operator co_await() && noexcept {
@@ -291,6 +301,10 @@ public:
         return awaiter{handle};
     }
 
+    ~Task() {
+        if(handle) handle.destroy();
+    }
+
     void consume_value() {
         handle.promise().get_value_or_exception();
     }
@@ -299,6 +313,16 @@ public:
     std::exception_ptr get_exception() { return handle.promise().get_exception(); }
     void resume() { if(handle) handle.resume(); }
 };
+
+// Check whether a type is a Task
+template <typename T>
+struct _is_task : std::false_type {};
+
+template <typename T, typename SuspendHandlerType, typename PromiseType>
+struct _is_task<Task<T, SuspendHandlerType, PromiseType>> : std::true_type {};
+
+template <typename T>
+concept IsTask = _is_task<std::remove_cvref_t<T>>::value;
 
 LCORE_ASYNC_NAMESPACE_END
 
