@@ -6,10 +6,6 @@
 
 LCORE_NAMESPACE_BEGIN
 
-using TypeInfo = std::type_info;
-using TypeInfoPtr = const TypeInfo*;
-using TypeInfoRef = const TypeInfo&;
-
 /// @brief Demangle a type name
 /// @param name The type name
 /// @return The demangled type name
@@ -39,5 +35,7 @@ inline const std::type_info& GetNthType(size_t n){
     std::array<const std::type_info*, sizeof...(Args)> types = {&typeid(Args)...};
     return *types[n];
 };
+
+
 
 LCORE_NAMESPACE_END

@@ -9,7 +9,7 @@
 #include <functional>
 #include <iostream>
 
-inline std::function<void()> crash_after(std::chrono::milliseconds duration) {
+inline auto crash_after(std::chrono::milliseconds duration) {
     std::shared_ptr<bool> cancelled = std::make_shared<bool>(false);
     std::thread([duration, cancelled]() {
         auto left = duration;
@@ -21,7 +21,12 @@ inline std::function<void()> crash_after(std::chrono::milliseconds duration) {
         std::cerr << "Test timed out after " << duration.count() << " milliseconds." << std::endl;
         std::terminate();
     }).detach();
-    return [cancelled]() {
-        *cancelled = true;
+    class Guard {
+    public:
+        Guard(std::shared_ptr<bool> cancelled) : cancelled(cancelled) {}
+        ~Guard() { *cancelled = true; }
+    private:
+        std::shared_ptr<bool> cancelled;
     };
+    return Guard(cancelled);
 }

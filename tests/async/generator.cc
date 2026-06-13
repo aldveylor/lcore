@@ -2,7 +2,7 @@
 #include "lcore/async/generator.hpp"
 #include "lcore/container.hpp"
 
-using namespace LCORE_NAMESPACE_NAME::async;
+using namespace LCORE_NAMESPACE::async;
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);

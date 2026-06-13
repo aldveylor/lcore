@@ -41,7 +41,7 @@ template <typename T, typename E>
 class Result {
 public:
     using ValueType = T;
-    using ErrorType = LCORE_NAMESPACE_NAME::Error<E>;
+    using ErrorType = LCORE_NAMESPACE::Error<E>;
     using ErrorValueType = E;
     
 private:
@@ -214,7 +214,7 @@ public:
 template <typename E>
 class Result<void, E> {
     using ValueType = void;
-    using ErrorType = LCORE_NAMESPACE_NAME::Error<E>;
+    using ErrorType = LCORE_NAMESPACE::Error<E>;
     using ErrorValueType = E;
     
 private:

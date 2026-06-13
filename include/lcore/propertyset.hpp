@@ -11,7 +11,7 @@ enum class PropertyFlags : uint8_t {
     Read = 0x01,
     Write = 0x02,
 };
-LCORE_ENUM_BITWISE_OPERATORS(LCORE_NAMESPACE_NAME::PropertyFlags)
+LCORE_ENUM_BITWISE_OPERATORS(LCORE_NAMESPACE::PropertyFlags)
 
 template <typename Key>
 class PropertyItemInfo {

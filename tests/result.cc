@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include "lcore/result.hpp"
 
-using namespace LCORE_NAMESPACE_NAME;
+using namespace LCORE_NAMESPACE;
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

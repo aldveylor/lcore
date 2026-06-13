@@ -1,5 +1,6 @@
 #pragma once
 #include "promise.hpp"
+#include <coroutine>
 
 LCORE_NAMESPACE_BEGIN
 namespace async {
@@ -59,6 +60,12 @@ public:
         return handle.promise().peek_value_or_exception();
     }
     void rethrow_exception() { handle.promise().rethrow_exception(); }
+
+    std::coroutine_handle<PromiseType> release() && {
+        auto h = handle;
+        handle = nullptr;
+        return h;
+    }
 };
 
 template <typename T>

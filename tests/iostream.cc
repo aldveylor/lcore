@@ -4,7 +4,7 @@
 #include <lcore/fstream.hpp>
 #include <sstream>
 
-using namespace LCORE_NAMESPACE_NAME;
+using namespace LCORE_NAMESPACE;
 
 /// Test for StringStream
 TEST(StringStreamTest, InputStream) {

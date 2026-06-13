@@ -52,7 +52,7 @@ class Parser:
             f.write('#include "lcore/reflecction/function.hpp"\n')
             f.write('#include "lcore/reflecction/enum.hpp"\n\n')
             
-            f.write('using namespace LCORE_NAMESPACE_NAME;\n')
+            f.write('using namespace LCORE_NAMESPACE;\n')
             f.write('using namespace LCORE_REFLECTION_NAMESPACE_NAME;\n\n')
             
             for cls in self.classes:

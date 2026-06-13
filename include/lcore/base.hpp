@@ -21,6 +21,7 @@
 #include "traits.hpp"
 #include "rawptr.hpp"
 #include "class.hpp"
+#include <typeindex>
 
 LCORE_NAMESPACE_BEGIN
 
@@ -30,5 +31,14 @@ using Ref = T&;
 using TypeInfo = std::type_info;
 using TypeInfoPtr = RawPtr<const TypeInfo>;
 using TypeInfoRef = Ref<const TypeInfo>;
+
+class TypeIndex: public std::type_index {
+public:
+    using std::type_index::type_index;
+    template <typename T>
+    static TypeIndex Of() {
+        return TypeIndex(typeid(T));
+    }
+};
 
 LCORE_NAMESPACE_END

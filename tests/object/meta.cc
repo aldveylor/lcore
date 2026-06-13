@@ -3,8 +3,8 @@
 #include <lcore/object/enummeta.hpp>
 
 
-using namespace LCORE_NAMESPACE_NAME;
-using namespace LCORE_NAMESPACE_NAME::object;
+using namespace LCORE_NAMESPACE;
+using namespace LCORE_NAMESPACE::object;
 
 // struct meta example
 

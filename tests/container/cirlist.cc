@@ -2,7 +2,7 @@
 #include <lcore/container/circulelist.hpp>
 #include <iostream>
 
-using namespace LCORE_NAMESPACE_NAME;
+using namespace LCORE_NAMESPACE;
 
 TEST(CircularListTest, BasicOperations) {
     CircularList<int> list;

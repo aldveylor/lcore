@@ -140,6 +140,9 @@ public:
         if (state) return state->get_handle();
         return nullptr;
     }
+    Ptr<StateType> get_state() const {
+        return state;
+    }
     
     bool done() const { return state->done(); }
     void resume() { if(state) state->resume(); }
@@ -154,8 +157,8 @@ public:
 };
 
 template <typename T>
-class EagerSharedTask: public SharedTaskBase<T, std::suspend_never, EagerSharedTask> {
-    using Base = SharedTaskBase<T, std::suspend_never, EagerSharedTask>;
+class SharedEagerTask: public SharedTaskBase<T, std::suspend_never, SharedEagerTask> {
+    using Base = SharedTaskBase<T, std::suspend_never, SharedEagerTask>;
     using StateType = typename Base::StateType;
 public:
     using Base::Base;
@@ -183,8 +186,8 @@ public:
 };
 
 template <typename T>
-class LazySharedTask: public SharedTaskBase<T, std::suspend_always, LazySharedTask> {
-    using Base = SharedTaskBase<T, std::suspend_always, LazySharedTask>;
+class SharedLazyTask: public SharedTaskBase<T, std::suspend_always, SharedLazyTask> {
+    using Base = SharedTaskBase<T, std::suspend_always, SharedLazyTask>;
     using StateType = typename Base::StateType;
 public:
     using Base::Base;
@@ -236,10 +239,10 @@ public:
 };
 
 template <typename T>
-using SharedLazy = LazySharedTask<T>;
+using SharedLazy = SharedLazyTask<T>;
 
 template <typename T>
-using SharedEager = EagerSharedTask<T>;
+using SharedEager = SharedEagerTask<T>;
 
 }
 LCORE_NAMESPACE_END

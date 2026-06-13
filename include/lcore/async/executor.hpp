@@ -2,205 +2,168 @@
  * @file executor.hpp
  * @brief Task executor
  */
-// #include "base.hpp"
-// #include "traits.hpp"
-// #include "lcore/container.hpp"
-// #include "task.hpp"
-// #include <optional>
-// #include <thread>
-// #include <mutex>
-// #include <condition_variable>
+#include "base.hpp"
+#include "lcore/traits.hpp"
+#include "lcore/container/list.hpp"
+#include "lcore/container/queue.hpp"
+#include "sharedtask.hpp"
+#include <coroutine>
+#include <mutex>
+#include <condition_variable>
+#include <map>
+#include <functional>
+#include <utility>
 
-// LCORE_ASYNC_NAMESPACE_BEGIN
+LCORE_ASYNC_NAMESPACE_BEGIN
 
-// template <template <typename> typename TaskType = DefaultTaskWrapper>
-// class Executor: public AbstractClass {
-// protected:
-//     virtual void DoSchedule(TaskType<void>&& task) = 0;
-// public:
-//     inline void Schedule(TaskType<void>&& task) {
-//         DoSchedule(std::move(task));
-//     }
-//     template <typename T>
-//     inline void Schedule(TaskType<T>&& task) {
-//         DoSchedule([task = std::move(task)]() mutable -> TaskType<void> {
-//             co_await std::move(task);
-//         }());
-//     }
-//     virtual void Run() = 0;
-//     virtual void Stop() = 0;
-// };
+class Component;
 
-// /// @brief A simple executor that runs tasks in current thread.
-// /// Not thread-safe, should be used in single thread.
-// /// When all tasks are done, it will stop automatically.
-// template <template <typename> typename TaskWrapper = DefaultTaskWrapper>
-// class DefaultExecutor: public Executor<TaskWrapper> {
-//     using TaskType = TaskWrapper<void>;
-// private:
-//     List<TaskType> m_coroutines;
-//     bool m_stopped = true;
-// protected:
-//     void DoSchedule(TaskType&& task) override {
-//         m_coroutines.emplace_back(std::move(task));
-//     }
-// public:
-//     bool sleepIfNoReadyTasks = true;
-//     void Run() override {
-//         m_stopped = false;
-//         while (!m_stopped && !m_coroutines.empty()){
-//             bool allSuspended = true;
-//             for (auto iter = m_coroutines.begin(); iter != m_coroutines.end();){
-//                 auto &coroutine = *iter;
-//                 if (coroutine.done()){
-//                     iter = m_coroutines.erase(iter);
-//                     allSuspended = false;
-//                 }else{
-//                     iter++;
-//                 }
-//             }
-//             if (sleepIfNoReadyTasks && allSuspended) {
-//                 std::this_thread::yield();
-//             }
-//         }
-//         m_stopped = true;
-//     }
-//     void Stop() override {
-//         m_stopped = true;
-//     }
-// };
+class Scheduler {
+    std::map<TypeIndex, UniquePtr<Component>> m_components;
+    List<Ptr<StateBase>> m_taskstates;
+    List<Ptr<StateBase>> m_newtaskstates;
 
-// /// @brief A thread-safe executor that runs tasks in current thread.
-// /// When all tasks are done, it will stop automatically.
-// template <template <typename> typename TaskWrapper = DefaultTaskWrapper>
-// class ThreadSafeExecutor: public Executor<TaskWrapper> {
-//     using TaskType = TaskWrapper<void>;
-// private:
-//     List<TaskType> m_coroutines;
-//     std::mutex m_mutex;
-//     bool m_stopped = true;
-// protected:
-//     void DoSchedule(TaskType&& task) override {
-//         std::lock_guard<std::mutex> lock(m_mutex);
-//         m_coroutines.push_back(std::move(task));
-//     }
-// public:
-//     bool sleepIfNoReadyTasks = true;
-//     void Run() override {
-//         auto _list_begin = [this]() {
-//             std::lock_guard<std::mutex> lock(m_mutex);
-//             return m_coroutines.begin();
-//         };
-//         auto _list_end = [this]() {
-//             std::lock_guard<std::mutex> lock(m_mutex);
-//             return m_coroutines.end();
-//         };
-//         auto _list_erase = [this](List<TaskType>::iterator iter) {
-//             std::lock_guard<std::mutex> lock(m_mutex);
-//             return m_coroutines.erase(iter);
-//         };
-//         auto _list_empty = [this]() {
-//             std::lock_guard<std::mutex> lock(m_mutex);
-//             return m_coroutines.empty();
-//         };
-//         m_stopped = false;
-//         while (!m_stopped && !_list_empty()){
-//             bool allSuspended = true;
-//             for (auto iter = _list_begin(); iter != _list_end();){
-//                 auto &coroutine = *iter;
-//                 if (coroutine.done()){
-//                     iter = _list_erase(iter);
-//                 }else{
-//                     iter++;
-//                 }
-//             }
-//             if (sleepIfNoReadyTasks && allSuspended) {
-//                 std::this_thread::yield();
-//             }
-//         }
-//         m_stopped = true;
-//     }
-//     void Stop() override {
-//         m_stopped = true;
-//     }
-// };
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    bool m_running = false;
 
-// /// @brief A threaded executor that runs tasks in another thread.
-// /// Will not stop automatically, need to call Stop() to stop the worker thread.
-// template <template <typename> typename TaskWrapper = DefaultTaskWrapper>
-// class ThreadedExecutor: public Executor<TaskWrapper> {
-//     using TaskType = TaskWrapper<void>;
-// private:
-//     List<TaskType> m_coroutines;
-//     std::mutex m_coroutinesMutex;
-//     std::condition_variable m_coroutinesCV;
+    void DoAttachComponent(TypeIndex, UniquePtr<Component>);
+    Component& DoGetComponent(TypeIndex);
+    UniquePtr<Component> DoDetachComponent(TypeIndex);
+protected:
+    /// @brief The main loop of the scheduler
+    void Loop();
+    /// @brief Schedule a task state to be executed in the next iteration of the scheduler loop
+    void DoSchedule(Ptr<StateBase>&&);
+    /// @brief Initialize the scheduler, called before the main loop starts
+    /// Use Scheduler::GetThis() to get the current scheduler instance instead
+    Scheduler() = default;
+public:
+    bool stopWhenIdle = true;
 
-//     std::optional<std::thread> m_worker;
-//     bool m_stopped = true;
-// protected:
-//     void ThreadFunc() {
-//         auto _list_begin = [this]() {
-//             std::lock_guard<std::mutex> lock(m_coroutinesMutex);
-//             return m_coroutines.begin();
-//         };
-//         auto _list_end = [this]() {
-//             std::lock_guard<std::mutex> lock(m_coroutinesMutex);
-//             return m_coroutines.end();
-//         };
-//         auto _list_erase = [this](List<TaskType>::iterator iter) {
-//             std::lock_guard<std::mutex> lock(m_coroutinesMutex);
-//             return m_coroutines.erase(iter);
-//         };
-//         auto _list_empty = [this]() {
-//             std::lock_guard<std::mutex> lock(m_coroutinesMutex);
-//             return m_coroutines.empty();
-//         };
-//         m_stopped = false;
-//         while (!m_stopped){
-//             if (_list_empty()){
-//                 std::unique_lock<std::mutex> lock(m_coroutinesMutex);
-//                 m_coroutinesCV.wait(lock, [this, &_list_empty](){ return m_stopped || !_list_empty(); });
-//                 if (m_stopped) break;
-//             }
-//             bool allSuspended = true;
-//             for (auto iter = _list_begin(); iter != _list_end();){
-//                 auto &coroutine = *iter;
-//                 if (coroutine.done()){
-//                     iter = _list_erase(iter);
-//                     allSuspended = false;
-//                 }else{
-//                     iter++;
-//                 }
-//             }
-//             if (sleepIfNoReadyTasks && allSuspended) {
-//                 std::this_thread::yield();
-//             }
-//         }
-//         m_stopped = true;
-//     }
-//     void DoSchedule(TaskType&& task) override {
-//         {
-//             std::lock_guard<std::mutex> lock(m_coroutinesMutex);
-//             m_coroutines.push_back(std::move(task));
-//         }
-//         m_coroutinesCV.notify_one();
-//     }
-// public:
-//     bool sleepIfNoReadyTasks = true;
-//     /// Not blocked
-//     void Run() override {
-//         m_worker = std::thread(&ThreadedExecutor::ThreadFunc, this);
-//     }
-//     void Stop() override {
-//         m_stopped = true;
-//         m_coroutinesCV.notify_all();
-//         if (m_worker.has_value()) {
-//             if (m_worker->joinable()) {
-//                 m_worker->join();
-//             }
-//             m_worker.reset();
-//         }
-//     }
-// };
+    /// @brief Get the current scheduler instance, only awailable in current thread
+    static Scheduler& GetThis();
+    /// @brief Attach a component to the scheduler, the component will be initialized immediately
+    template <typename T, typename... Args>
+    Scheduler& AttachComponent(Args&&... args) {
+        this->DoAttachComponent(TypeIndex::Of<T>(), MakeUnique<T>(std::forward<Args>(args)...));
+        return *this;
+    }
+    /// @brief Get a reference to the component, or throw if the component is not attached
+    template <typename T>
+    T& GetComponent() {
+        return static_cast<T&>(this->DoGetComponent(TypeIndex::Of<T>()));
+    }
+    /// @brief Detach the component, the component will be finalized immediately, and returned as a unique pointer
+    template <typename T>
+    UniquePtr<T> DetachComponent() {
+        return this->DetachComponent(TypeIndex::Of<T>()).template Cast<T>();
+    }
 
-// LCORE_ASYNC_NAMESPACE_END
+    /// @brief Run the scheduler loop
+    void Run();
+    /// @brief Stop the scheduler loop
+    void Stop();
+    /// @brief Notify the scheduler to wake up and handle events, called by components when an event is triggered
+    void Notify() { m_cv.notify_one(); }
+
+    /// @brief Schedule a task to be executed in the next iteration of the scheduler loop
+    template <typename T>
+    void Schedule(LazyTask<T>&& task) {
+        auto raw_handle = std::move(task).release();
+        DoSchedule(MakeShared<StateBase>(
+            std::coroutine_handle<PromiseBase>::from_promise(raw_handle.promise())));
+    }
+    /// @brief Schedule a shared task to be executed in the next iteration of the scheduler loop
+    template <typename T>
+    void Schedule(SharedLazyTask<T>&& task) {
+        DoSchedule(task.get_state());
+    }
+};
+
+class Component: public AbstractClass {
+public:
+    using Duration = std::chrono::steady_clock::duration;
+
+    virtual void DoInitialize(Scheduler&) {}
+    virtual void DoFinalize(Scheduler&) {}
+
+    /// @brief Get the duration until the next event, if the component has an timeout event to handle, otherwise return `Duration::max()`
+    virtual Duration GetNextEventDuration() const { return Duration::max(); }
+    /// @brief Handle the event, called when the condition variable is notified or the timeout expires
+    /// return true if an event is handled
+    /// If any event is handled, the scheduler will enter loop
+    virtual bool HandleEvent(Scheduler&) { return false; }
+
+    /// @brief Loop function called in each iteration of the scheduler loop
+    virtual void Loop(Scheduler&) {}
+};
+
+class TimerComponent: public Component {
+public:
+    using TimePoint = std::chrono::steady_clock::time_point;
+private:
+    struct Timer {
+        TimePoint time;
+        std::coroutine_handle<> handle;
+
+        bool operator>(const Timer& other) const { return time > other.time; }
+        void resume() && { handle.resume(); }
+    };
+    IterablePriorityQueue<Timer, std::vector<Timer>, std::greater<>> m_timers;
+    mutable std::mutex m_mutex;
+public:
+    void AddTimer(TimePoint time, std::coroutine_handle<> handle);
+    /// @brief Remove a timer, return true if the timer is removed, false if the timer is not found or already expired
+    bool RemoveTimer(TimePoint time, std::coroutine_handle<> handle);
+    Duration GetNextEventDuration() const override;
+    bool HandleEvent(Scheduler&) override;
+};
+
+/// @brief Sleep for a duration, the task will be resumed after the duration expires
+/// @note Called only in executor context, otherwise the behavior is undefined
+Lazy<void> Sleep(TimerComponent::Duration duration);
+/// @brief Sleep until a time point, the task will be resumed after the time point is reached
+/// @note Called only in executor context, otherwise the behavior is undefined
+Lazy<void> SleepUntil(TimerComponent::TimePoint time);
+/// @brief Set a timeout for the task, the task will be executed after the timeout expires
+/// @return A function that can be called to cancel the timeout, if the timeout is not expired yet
+/// @note Called only in executor context, otherwise the behavior is undefined
+std::function<void()> SetTimeout(TimerComponent::Duration timeout, LazyTask<void>&& task);
+/// @brief Set a timeout for the task, the task will be executed after the timeout expires
+/// @param func The function to be called when the timeout expires
+/// @return A function that can be called to cancel the timeout, if the timeout is not expired yet
+/// @note Called only in executor context, otherwise the behavior is undefined
+template <typename Func>
+requires InvokeAble<Func>
+auto SetTimeout(TimerComponent::Duration timeout, Func&& func) {
+    return SetTimeout(timeout, [](Func func) -> Lazy<void> {
+        func();
+        co_return;
+    }(std::move(func)));
+}
+/// @brief Set an interval for the task, the task will be executed repeatedly with the interval until the returned cancel function is called
+/// @return A function that can be called to cancel the interval, if the interval is not canceled yet
+/// @note Called only in executor context, otherwise the behavior is undefined
+template <typename Func>
+requires InvokeAble<Func>
+auto SetInterval(TimerComponent::Duration interval, Func&& func) {
+    using FuncType = std::decay_t<Func>;
+    struct State {
+        std::function<void()> cancel;
+        std::function<void()> set_next;
+        FuncType func;
+        State(Func func): func(std::move(func)) {}
+    };
+    auto state = MakeShared<State>(std::forward<Func>(func));
+    state->set_next = [state, interval]() {
+        state->cancel = SetTimeout(interval, [state]() {
+            state->func();
+            state->set_next();
+        });
+    };
+    state->set_next();
+    return [state]() { state->cancel(); };
+}
+
+LCORE_ASYNC_NAMESPACE_END

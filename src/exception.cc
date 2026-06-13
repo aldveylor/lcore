@@ -3,9 +3,9 @@
 #include <execinfo.h>
 #include <iostream>
 
-using namespace LCORE_NAMESPACE_NAME;
+using namespace LCORE_NAMESPACE;
 
-std::vector<const char*> LCORE_NAMESPACE_NAME::GetStacktrace(int skip, size_t size){
+std::vector<const char*> LCORE_NAMESPACE::GetStacktrace(int skip, size_t size){
     void *buffer[LCORE_STACKTRACE_SIZE];
     size_t stacktrace_size = backtrace(buffer, LCORE_STACKTRACE_SIZE);
     char **stacktrace = backtrace_symbols(buffer, stacktrace_size);

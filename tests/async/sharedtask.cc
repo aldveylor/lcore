@@ -4,7 +4,7 @@
 #include "lcore/async/awaiter.hpp"
 #include "timeout.hpp"
 
-using namespace LCORE_NAMESPACE_NAME::async;
+using namespace LCORE_NAMESPACE::async;
 
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
@@ -40,7 +40,7 @@ TEST(LazySharedTask, Execution) {
     };
     auto t2 = task2();
 
-    crash_after(std::chrono::seconds(5));
+    auto _ = crash_after(std::chrono::seconds(5));
 
     EXPECT_EQ(i, 0); // i should be 0 immediately after task creation
 
@@ -72,7 +72,7 @@ TEST(EagerSharedTask, ImmediateExecution) {
             i += 1;
         }
     };
-    crash_after(std::chrono::seconds(5));
+    auto _  = crash_after(std::chrono::seconds(5));
     auto t = task();
 
     EXPECT_EQ(i, 1); // i should be 1 immediately after task creation

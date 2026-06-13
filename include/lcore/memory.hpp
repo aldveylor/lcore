@@ -196,7 +196,7 @@ class SharedPtr {
     template <typename U>
     friend class WeakPtr;
     template <typename U, typename... Args>
-    friend SharedPtr<U> MakePtr(Args&&... args);
+    friend SharedPtr<U> MakeShared(Args&&... args);
 protected:
     RawPtr<T> m_tptr;
     RawPtr<detail::ControlBlockBase<>> m_cb = nullptr;
@@ -540,7 +540,7 @@ template <typename T>
 using Ptr = SharedPtr<T>;
 
 template <typename T, typename... Args>
-inline SharedPtr<T> MakePtr(Args&&... args) {
+inline SharedPtr<T> MakeShared(Args&&... args) {
     // return SharedPtr<T>(new T(std::forward<Args>(args)...));
     struct CbWithT: public detail::ControlBlockBase<> {
         alignas(T) unsigned char mem[sizeof(T)];
@@ -570,7 +570,7 @@ inline SharedPtr<T> MakePtr(Args&&... args) {
 
 template <typename T, typename... Args>
 inline SharedPtr<T> New(Args&&... args) {
-    return MakePtr<T>(std::forward<Args>(args)...);
+    return MakeShared<T>(std::forward<Args>(args)...);
 };
 
 /// @brief Unique pointer
@@ -670,7 +670,7 @@ public:
 };
 
 template <typename T, typename... Args>
-inline constexpr UniquePtr<T> MakeUniquePtr(Args&&... args) {
+inline constexpr UniquePtr<T> MakeUnique(Args&&... args) {
     return UniquePtr<T>(new T(std::forward<Args>(args)...));
 };
 
@@ -680,20 +680,20 @@ LCORE_NAMESPACE_END
 // Hash specialization for RawPtr, SharedPtr and UniquePtr
 namespace std {
 template <typename T>
-struct hash<LCORE_NAMESPACE_NAME::RawPtr<T>> {
-    inline size_t operator()(const LCORE_NAMESPACE_NAME::RawPtr<T>& ptr) const noexcept {
+struct hash<LCORE_NAMESPACE::RawPtr<T>> {
+    inline size_t operator()(const LCORE_NAMESPACE::RawPtr<T>& ptr) const noexcept {
         return hash<T*>()(ptr.Get());
     }
 };
 template <typename T>
-struct hash<LCORE_NAMESPACE_NAME::SharedPtr<T>> {
-    inline size_t operator()(const LCORE_NAMESPACE_NAME::SharedPtr<T>& ptr) const noexcept {
+struct hash<LCORE_NAMESPACE::SharedPtr<T>> {
+    inline size_t operator()(const LCORE_NAMESPACE::SharedPtr<T>& ptr) const noexcept {
         return hash<T*>()(ptr.Get().Get());
     }
 };
 template <typename T, typename Deleter>
-struct hash<LCORE_NAMESPACE_NAME::UniquePtr<T, Deleter>> {
-    inline size_t operator()(const LCORE_NAMESPACE_NAME::UniquePtr<T, Deleter>& ptr) const noexcept {
+struct hash<LCORE_NAMESPACE::UniquePtr<T, Deleter>> {
+    inline size_t operator()(const LCORE_NAMESPACE::UniquePtr<T, Deleter>& ptr) const noexcept {
         return hash<T*>()(ptr.Get().Get());
     }
 };

@@ -88,6 +88,17 @@ public:
     }
 };
 
+/// @brief The logic error
+class LogicError: public Exception {
+protected:
+    const char* m_msg;
+public:
+    LogicError(const char* msg): m_msg(msg) {}
+    inline const char* what() const noexcept override {
+        return m_msg;
+    }
+};
+
 LCORE_NAMESPACE_END
 
-#define LCORE_NOTIMPLEMENTED() do {throw LCORE_NAMESPACE_NAME::NotImplementedError(__func__, __FILE__, __LINE__);} while(0)
+#define LCORE_NOTIMPLEMENTED() do {throw LCORE_NAMESPACE::NotImplementedError(__func__, __FILE__, __LINE__);} while(0)
