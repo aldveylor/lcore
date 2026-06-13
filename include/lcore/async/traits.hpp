@@ -19,12 +19,20 @@ concept IsCoroutineHandle = requires(T t){
     {t.destroy()};
 };
 
+namespace _detail {
+    template <typename T>
+    concept AwaitSuspendReturnType = Same<T, void> || Same<T, bool> || IsCoroutineHandle<T>;
+};
+
 template <typename T>
 concept IsAwaitableImplement = requires(T t){
-    typename T::value_type;
-    {t.await_ready()} -> Same<bool>;
-    {t.await_suspend()} -> IsCoroutineHandle;
-    {t.await_resume()} -> Same<typename T::value_type>;
+    // typename T::value_type;
+    {t.await_ready()} -> ConvertibleTo<bool>;
+
+    // await_suspend has a template parameter, so we can't check the return type directly.
+    // {t.await_suspend(std::coroutine_handle<>{})} -> _detail::AwaitSuspendReturnType;
+    
+    {t.await_resume()};
 };
 
 template <typename T>
@@ -57,7 +65,7 @@ template <typename T>
 concept IsPromise = requires(T t){
     requires IsSuspendHandler<T>;
     requires PromiseReturnValue<T> || PromiseReturnVoid<T> || PromiseYieldValue<T>;
-    {t.get_return_object()};
+    // {t.get_return_object()};
     {t.unhandled_exception()};
 };
 
@@ -67,7 +75,7 @@ template <typename T>
 concept IsTask = requires(T t){
     typename T::promise_type;
     requires IsPromise<typename T::promise_type>;
-    requires ConstructibleWith<T, typename T::promise_type>;
+    requires ConstructibleWith<T, std::coroutine_handle<typename T::promise_type>>;
 };
 
 LCORE_NAMESPACE_END
