@@ -8,6 +8,21 @@ if (MSVC)
     add_compile_options(/Zc:__cplusplus)
 endif()
 
+# Required module
+find_package(PkgConfig REQUIRED)
+set(ADDITIONAL_LIBS "")
+
+# Linux: liburing
+if (UNIX AND NOT APPLE)
+    pkg_check_modules(LIBURING REQUIRED liburing)
+    include_directories(${LIBURING_INCLUDE_DIRS})
+    link_directories(${LIBURING_LIBRARY_DIRS})
+    add_definitions(${LIBURING_CFLAGS_OTHER})
+    set(ADDITIONAL_LIBS ${ADDITIONAL_LIBS} ${LIBURING_LIBRARIES})
+endif()
+
+# LCore options
+
 option(LCORE_ENABLE_RECORDSTACK "Enable record stack" ON)
 option(LCORE_ENABLE_ASSERT "Enable assert" ON)
 
@@ -41,6 +56,7 @@ add_library(lcore ${SRC_FILES} ${INC_FILES})
 set_target_properties(lcore PROPERTIES 
     POSITION_INDEPENDENT_CODE ON
 )
+link_libraries(lcore ${ADDITIONAL_LIBS})
 
 if (LCORE_DEBUG)
     # Enable all warnings and treat warnings as errors

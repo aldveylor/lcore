@@ -39,9 +39,11 @@ protected:
     /// @brief Initialize the scheduler, called before the main loop starts
     /// Use Scheduler::GetThis() to get the current scheduler instance instead
     Scheduler() = default;
+    ~Scheduler();
 public:
     bool stopWhenIdle = true;                   /// If true, the scheduler will stop automaticly when there is no task to execute
     bool waitForConditionVariable = true;       /// If true, the scheduler will wait for the condition variable to be notified when there is no task to execute, otherwise it will busy wait
+    std::function<void(std::exception_ptr)> exceptionHandler;  /// The exception handler, called when a task throws an exception, if not set, the exception will be ignored
 
     /// @brief Get the current scheduler instance, only awailable in current thread
     static Scheduler& GetInstance();
@@ -95,13 +97,29 @@ public:
     void Schedule(SharedLazyTask<T>&& task) {
         DoSchedule(task.get_state());
     }
+    /// @brief Schedule a function to be executed in the next iteration of the scheduler loop
+    template <typename Func>
+    requires InvokeAble<Func> && (!IsTask<ResultCallable<Func>>)
+    void Schedule(Func&& func) {
+        Schedule([](Func func) -> Lazy<void> {
+            func();
+            co_return;
+        }(std::move(func)));
+    }
 };
 
+/**
+ * @brief A module that can be attached to the scheduler to handle events, such as timers, I/O events, etc.
+ * The component will be initialized when attached to the scheduler, and finalized when detached from the scheduler
+ */
 class Component: public AbstractClass {
 public:
     using Duration = std::chrono::steady_clock::duration;
 
+    /// @brief Initialize the component, called when the component is attached to the scheduler
     virtual void DoInitialize(Scheduler&) {}
+
+    /// @brief Finalize the component, called when the component is detached from the scheduler
     virtual void DoFinalize(Scheduler&) {}
 
     /// @brief Get the duration until the next event, if the component has an timeout event to handle, otherwise return `Duration::max()`

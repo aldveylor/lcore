@@ -224,6 +224,9 @@ using EnableIf = std::enable_if_t<Cond, T>;
 template <bool Cond, typename T, typename F>
 using Conditional = std::conditional_t<Cond, T, F>;
 
+template <typename I, typename M, typename F>
+using ReplaceIf = std::conditional_t<std::is_same_v<I, M>, F, I>;
+
 template <typename T, typename ...Args>
 concept ConstructibleWith = requires(T t, Args... args){
     {T(args...)} -> Same<T>;

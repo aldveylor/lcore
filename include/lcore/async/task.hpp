@@ -68,7 +68,7 @@ public:
     }
 };
 
-template <typename T>
+template <typename T = void>
 class EagerTask : public TaskBase<Promise<T, std::suspend_never, EagerTask>> {
 public:
     using Base = TaskBase<Promise<T, std::suspend_never, EagerTask>>;
@@ -98,7 +98,7 @@ public:
     }
 };
 
-template <typename T>
+template <typename T = void>
 class LazyTask : public TaskBase<Promise<T, std::suspend_always, LazyTask>> {
 public:
     using Base = TaskBase<Promise<T, std::suspend_always, LazyTask>>;
@@ -128,10 +128,10 @@ public:
     }
 };
 
-template <typename T>
+template <typename T = void>
 using Eager = EagerTask<T>;
 
-template <typename T>
+template <typename T = void>
 using Lazy = LazyTask<T>;
 
 }

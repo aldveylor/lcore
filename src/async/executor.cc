@@ -10,10 +10,31 @@ using namespace LCORE_NAMESPACE::async;
 
 // Scheduler
 
+Scheduler::~Scheduler() {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    for (auto& [typeIndex, component] : m_components) {
+        lock.unlock();
+        component->DoFinalize(*this);
+        lock.lock();
+    }
+}
+
 bool Scheduler::DoAttachComponent(TypeIndex typeIndex, UniquePtr<Component> component)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     auto [it, inserted] = m_components.emplace(typeIndex, std::move(component));
+    if (inserted) {
+        lock.unlock();
+        try {
+            it->second->DoInitialize(*this);
+        }
+        catch (...)
+        {
+            m_components.erase(it);
+            std::rethrow_exception(std::current_exception());
+        }
+        lock.lock();
+    }
     return inserted;
 }
 
@@ -29,11 +50,14 @@ RawPtr<Component> Scheduler::DoGetComponent(TypeIndex typeIndex) const
 
 UniquePtr<Component> Scheduler::DoDetachComponent(TypeIndex typeIndex)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
     auto it = m_components.find(typeIndex);
     if (it == m_components.end()) {
         return nullptr;
     }
+    lock.unlock();
+    it->second->DoFinalize(*this);
+    lock.lock();
     UniquePtr<Component> component = std::move(it->second);
     m_components.erase(it);
     return component;
@@ -55,17 +79,21 @@ void Scheduler::Loop() {
         }
     }
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::unique_lock<std::mutex> lock(m_mutex);
         // Immediately, not need for sperate lock
         for (auto it = m_taskstates.begin(); it != m_taskstates.end();) {
-            auto& task = *it;
+            auto task = *it;
             if (task->done()) {
                 it = m_taskstates.erase(it);
+                if (this->exceptionHandler && task->has_exception()) {
+                    lock.unlock();
+                    this->exceptionHandler(task->get_exception());
+                    lock.lock();
+                }
             } else {
                 ++it;
             }
         }
-        std::cout << "Current active tasks: " << m_taskstates.size() << std::endl;
     }
 }
 
@@ -259,18 +287,16 @@ Lazy<void> async::SleepUntil(TimerComponent::TimePoint time) {
     co_await Awaiter{Scheduler::GetInstance(), time};
 }
 
-Lazy<void> WrapTimeout(LazyTask<void> task, SharedPtr<bool> cancelled) {
-    co_await std::suspend_always{};
-    if (*cancelled) co_return;
-    co_await std::move(task);
-}
-
 std::function<void()> async::SetTimeout(TimerComponent::Duration duration, LazyTask<void>&& task) {
     auto& scheduler = Scheduler::GetInstance();
     auto time = std::chrono::steady_clock::now() + duration;
     auto& timerComponent = scheduler.GetComponent<TimerComponent>();
     auto cancelled = MakeShared<bool>(false);
-    auto wrapTask = WrapTimeout(std::move(task), cancelled);
+    auto wrapTask = [](LazyTask<void> task, SharedPtr<bool> cancelled) -> Lazy<void> {
+        co_await std::suspend_always{};
+        if (*cancelled) co_return;
+        co_await std::move(task);
+    }(std::move(task), cancelled);
     auto handle = wrapTask.get_handle();
     scheduler.Schedule(std::move(wrapTask));
     timerComponent.AddTimer(time, handle);

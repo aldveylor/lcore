@@ -41,4 +41,28 @@ public:
     }
 };
 
+using Size = std::size_t;
+using Offset = std::ptrdiff_t;
+
+struct Monostate {
+    inline operator bool() const noexcept {
+        return false;
+    }
+    inline bool operator!() const noexcept {
+        return true;
+    }
+    inline operator std::nullptr_t() const noexcept {
+        return nullptr;
+    }
+    inline operator void*() const noexcept {
+        return nullptr;
+    }
+    inline bool operator==( Monostate ) const noexcept {
+        return true;
+    }
+    inline bool operator!=( Monostate ) const noexcept {
+        return false;
+    }
+};
+
 LCORE_NAMESPACE_END

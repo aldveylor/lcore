@@ -99,6 +99,17 @@ public:
     }
 };
 
+/// @brief The invalid argument error
+class InvalidArgument: public Exception {
+protected:
+    const char* m_msg;
+public:
+    InvalidArgument(const char* msg): Exception(), m_msg(msg) {}
+    inline const char* what() const noexcept override {
+        return m_msg;
+    }
+};
+
 LCORE_NAMESPACE_END
 
 #define LCORE_NOTIMPLEMENTED() do {throw LCORE_NAMESPACE::NotImplementedError(__func__, __FILE__, __LINE__);} while(0)

@@ -250,8 +250,8 @@ public:
     inline constexpr Span(T* begin, size_t count): begin_(begin), end_(begin + count){};
     template <std::size_t N>
     inline constexpr Span(T (&arr)[N]): begin_(arr), end_(arr + N){};
-    template <std::size_t N>
-    inline constexpr Span(std::array<T, N>& arr): begin_(arr.data()), end_(arr.data() + N){};
+    template <Iterable C>
+    inline constexpr Span(const C& container): begin_(container.begin()), end_(container.end()) {};
 
     inline constexpr iterator begin() { return begin_; }
     inline constexpr iterator end() { return end_; }
@@ -345,9 +345,8 @@ public:
     inline constexpr Span(const T* begin, size_t count): begin_(begin), end_(begin + count){};
     template <std::size_t N>
     inline constexpr Span(const T (&arr)[N]): begin_(arr), end_(arr + N){};
-    template <std::size_t N>
-    inline constexpr Span(const std::array<T, N>& arr): begin_(arr.data()), end_(arr.data() + N){};
-    inline constexpr Span(const Span<T>& span): begin_(span.begin()), end_(span.end()){};
+    template <Iterable C>
+    inline constexpr Span(const C& container): begin_(container.begin()), end_(container.end()) {};
 
     // inline constexpr iterator begin() { return begin_; }
     // inline constexpr iterator end() { return end_; }

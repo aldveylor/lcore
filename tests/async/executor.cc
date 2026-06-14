@@ -23,7 +23,10 @@ TEST(Scheduler, Run)
         co_return;
     }());
     scheduler.Schedule([&]()->SharedLazy<void> {
-        executed2 = true;
+        co_await [&]()->Lazy<void> {
+            executed2 = true;
+            co_return;
+        }();
         co_return;
     }());
     scheduler.Run();

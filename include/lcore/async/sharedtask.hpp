@@ -156,7 +156,7 @@ public:
     auto& ref_value() const requires (!Void<T>) { return state->ref_value(); }
 };
 
-template <typename T>
+template <typename T = void>
 class SharedEagerTask: public SharedTaskBase<T, std::suspend_never, SharedEagerTask> {
     using Base = SharedTaskBase<T, std::suspend_never, SharedEagerTask>;
     using StateType = typename Base::StateType;
@@ -185,7 +185,7 @@ public:
     }
 };
 
-template <typename T>
+template <typename T = void>
 class SharedLazyTask: public SharedTaskBase<T, std::suspend_always, SharedLazyTask> {
     using Base = SharedTaskBase<T, std::suspend_always, SharedLazyTask>;
     using StateType = typename Base::StateType;
@@ -238,10 +238,10 @@ public:
     }
 };
 
-template <typename T>
+template <typename T = void>
 using SharedLazy = SharedLazyTask<T>;
 
-template <typename T>
+template <typename T = void>
 using SharedEager = SharedEagerTask<T>;
 
 }

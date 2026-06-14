@@ -1,10 +1,14 @@
 #pragma once
 #include "base.hpp"
-#include "lcore/traits.hpp"
+#include "traits.hpp"
+#include "executor.hpp"
+#include <exception>
 #include <optional>
 #include <coroutine>
 #include <mutex>
 #include <condition_variable>
+#include <utility>
+#include <vector>
 
 LCORE_NAMESPACE_BEGIN
 namespace async {
@@ -113,6 +117,203 @@ public:
         if (m_handle) return;
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cv.wait(lock, [this] { return m_handle != nullptr; });
+    }
+};
+
+namespace _detail {
+
+template <typename... Awaiter>
+struct WhenAllAwaiterWrapper {
+    using ResultTuple = std::tuple<ReplaceIf<GetAwaitResult<Awaiter>, void, Monostate>...>;
+    using StroagedResultTuple = std::tuple<std::optional<GetAwaitResult<Awaiter>>...>;
+
+    std::tuple<Awaiter...> awaiters;
+    std::tuple<std::optional<ReplaceIf<GetAwaitResult<Awaiter>, void, Monostate>>...> results;
+    std::exception_ptr exception;
+    std::size_t count{ sizeof...(Awaiter) };
+    std::coroutine_handle<> handle;
+    Scheduler& scheduler = Scheduler::GetInstance();
+
+    WhenAllAwaiterWrapper(Awaiter&&... awts) : awaiters(std::move(awts)...) {}
+
+    template<std::size_t... I, class... Awts>
+    void schedule_all(std::index_sequence<I...>, Awts&&... awts){
+        (schedule_one<I>(std::forward<Awts>(awts)), ...);
+    }
+
+    template<std::size_t I, class A>
+    void schedule_one(A&& awt)
+    {
+        scheduler.Schedule([this](A&& awt) mutable -> Lazy<void> {
+            try {
+                if constexpr (std::is_void_v<GetAwaitResult<std::decay_t<A>>>) {
+                    co_await std::move(awt);
+                    std::get<I>(results) = Monostate{};
+                } else {
+                    std::get<I>(results) = co_await std::move(awt);
+                }
+            } catch (...) {
+                exception = std::current_exception();
+                handle.resume();
+                co_return;
+            }
+            if (--count == 0) {
+                handle.resume();
+            }
+        }(std::forward<A>(awt)));
+    }
+
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) {
+        this->handle = h;
+        std::apply([this](auto&&... awts) {
+            using IS = std::index_sequence_for<Awaiter...>;
+            schedule_all(IS{}, std::forward<decltype(awts)>(awts)...);
+        }, awaiters);
+    }
+    auto await_resume() {
+        if (exception) std::rethrow_exception(exception);
+        return std::apply([](auto&&... res) {
+            return std::make_tuple(std::move(*res)...);
+        }, results);
+    }
+};
+
+template <typename... Awaiter>
+struct WhenAnyAwaiterWrapper {
+    std::tuple<Awaiter...> awaiters;
+    std::tuple<std::optional<ReplaceIf<GetAwaitResult<Awaiter>, void, Monostate>>...> results;
+    std::shared_ptr<std::atomic<int>> ready_index = std::make_shared<std::atomic<int>>(-1);
+    std::exception_ptr exception;
+    std::coroutine_handle<> handle;
+    Scheduler& scheduler = Scheduler::GetInstance();
+
+    WhenAnyAwaiterWrapper(Awaiter&&... awts) : awaiters(std::move(awts)...) {}
+    template<std::size_t... I, class... Awts>
+    void schedule_all(std::index_sequence<I...>, Awts&&... awts){
+        (schedule_one<I>(std::forward<Awts>(awts)), ...);
+    }
+    template<std::size_t I, class A>
+    void schedule_one(A&& awt)
+    {
+        scheduler.Schedule([this](A&& awt) mutable -> Lazy<void> {
+            try {
+                if constexpr (std::is_void_v<GetAwaitResult<std::decay_t<A>>>) {
+                    co_await std::move(awt);
+                    std::get<I>(results) = Monostate{};
+                } else {
+                    std::get<I>(results) = co_await std::move(awt);
+                }
+            } catch (...) {
+                // This object is only meaningful when ready_index is -1
+                // When it's set to a non-negative value, it means `co_await` has been already resumed,
+                // and this awaiter may be destroyed
+
+                int expected = -1;
+                if (ready_index->compare_exchange_strong(expected, I)) {
+                    exception = std::current_exception();
+                    handle.resume();
+                }
+                co_return;
+            }
+            int expected = -1;
+            if (ready_index->compare_exchange_strong(expected, I)) {
+                handle.resume();
+            }
+        }(std::forward<A>(awt)));
+    }
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) {
+        this->handle = h;
+        std::apply([this](auto&&... awts) {
+            using IS = std::index_sequence_for<Awaiter...>;
+            schedule_all(IS{}, std::forward<decltype(awts)>(awts)...);
+        }, awaiters);
+    }
+    auto await_resume() {
+        if (exception) std::rethrow_exception(exception);
+        int index = ready_index->load();
+        if (index < 0) throw RuntimeError("No awaiter is ready");
+        return std::make_pair(index, std::move(this->results));
+    }
+};
+
+}
+
+/// @brief Waits for all awaitables to complete and returns their results as a tuple.
+/// **Note**: The coroutines will be resumed in the same thread that completes the last awaitable.
+template <typename ...Awaiter>
+requires (IsAwaitable<Awaiter> && ...)
+inline auto WhenAll(Awaiter&&... awaiters) {
+    return _detail::WhenAllAwaiterWrapper(std::move(awaiters)...);
+};
+
+/// @brief Waits for any one of the awaitables to complete and returns a pair of the index of the completed awaitable and its result.
+/// **Note**: The coroutine will be resumed in the same thread that completes the first await
+template <typename ...Awaiter>
+requires (IsAwaitable<Awaiter> && ...)
+inline auto WhenAny(Awaiter&&... awaiters) {
+    return _detail::WhenAnyAwaiterWrapper(std::move(awaiters)...);
+};
+
+template <Iterable AwaitableContainer>
+requires (IsAwaitable<typename std::decay_t<AwaitableContainer>::value_type>)
+inline auto WhenAll(AwaitableContainer&& container) {
+    using AwaiterType = typename std::decay_t<AwaitableContainer>::value_type;
+    using ResultType = GetAwaitResult<AwaiterType>;
+    struct AwaiterNotVoid {
+        AwaitableContainer awaitables;
+        std::vector<std::optional<ResultType>> results;
+        std::atomic<size_t> count;
+        std::coroutine_handle<> handle;
+        Scheduler& scheduler = Scheduler::GetInstance();
+
+        AwaiterNotVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)), results(awaitables.size()), count(awaitables.size()) {}
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<> h) {
+            this->handle = h;
+            for (size_t i = 0; i < awaitables.size(); ++i) {
+                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                    results[i] = co_await std::move(awt);
+                    if (--count == 0) {
+                        handle.resume();
+                    }
+                }(std::move(awaitables[i])));
+            }
+        }
+        auto await_resume() {
+            std::vector<ResultType> ret;
+            for (auto& res : results) {
+                ret.push_back(std::move(*res));
+            }
+            return ret;
+        }
+    };
+    struct AwaiterVoid {
+        AwaitableContainer awaitables;
+        std::atomic<size_t> count;
+        std::coroutine_handle<> handle;
+        Scheduler& scheduler = Scheduler::GetInstance();
+
+        AwaiterVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)), count(awaitables.size()) {}
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<> h) {
+            this->handle = h;
+            for (size_t i = 0; i < awaitables.size(); ++i) {
+                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                    co_await std::move(awt);
+                    if (--count == 0) {
+                        handle.resume();
+                    }
+                }(std::move(awaitables[i])));
+            }
+        }
+        void await_resume() const noexcept {}
+    };
+    if constexpr (std::is_void_v<ResultType>) {
+        return AwaiterVoid(std::forward<AwaitableContainer>(container));
+    } else {
+        return AwaiterNotVoid(std::forward<AwaitableContainer>(container));
     }
 };
 
