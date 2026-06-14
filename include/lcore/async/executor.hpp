@@ -23,12 +23,13 @@ class Scheduler {
     List<Ptr<StateBase>> m_taskstates;
     List<Ptr<StateBase>> m_newtaskstates;
 
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::condition_variable m_cv;
     bool m_running = false;
-
-    void DoAttachComponent(TypeIndex, UniquePtr<Component>);
-    Component& DoGetComponent(TypeIndex);
+    /// @brief Attach a component to the scheduler, the component will be initialized immediately
+    /// @return true if the component is attached successfully, false if the component is already attached
+    bool DoAttachComponent(TypeIndex, UniquePtr<Component>);
+    RawPtr<Component> DoGetComponent(TypeIndex) const;
     UniquePtr<Component> DoDetachComponent(TypeIndex);
 protected:
     /// @brief The main loop of the scheduler
@@ -39,25 +40,40 @@ protected:
     /// Use Scheduler::GetThis() to get the current scheduler instance instead
     Scheduler() = default;
 public:
-    bool stopWhenIdle = true;
+    bool stopWhenIdle = true;                   /// If true, the scheduler will stop automaticly when there is no task to execute
+    bool waitForConditionVariable = true;       /// If true, the scheduler will wait for the condition variable to be notified when there is no task to execute, otherwise it will busy wait
 
     /// @brief Get the current scheduler instance, only awailable in current thread
-    static Scheduler& GetThis();
+    static Scheduler& GetInstance();
     /// @brief Attach a component to the scheduler, the component will be initialized immediately
     template <typename T, typename... Args>
     Scheduler& AttachComponent(Args&&... args) {
         this->DoAttachComponent(TypeIndex::Of<T>(), MakeUnique<T>(std::forward<Args>(args)...));
         return *this;
     }
+    template <typename T, typename... Args>
+    Scheduler& AttachComponentSafe(Args&&... args) {
+        if (this->GetComponentSafe<T>()) return *this;  // avoid factory a component if it is already attached
+        this->DoAttachComponent(TypeIndex::Of<T>(), MakeUnique<T>(std::forward<Args>(args)...));
+        return *this;
+    }
     /// @brief Get a reference to the component, or throw if the component is not attached
     template <typename T>
     T& GetComponent() {
-        return static_cast<T&>(this->DoGetComponent(TypeIndex::Of<T>()));
+        auto component = this->DoGetComponent(TypeIndex::Of<T>());
+        if (!component) throw RuntimeError("Component not found");
+        return static_cast<T&>(*component);
+    }
+    template <typename T>
+    T* GetComponentSafe() {
+        auto component = this->DoGetComponent(TypeIndex::Of<T>());
+        return static_cast<T*>(component);
     }
     /// @brief Detach the component, the component will be finalized immediately, and returned as a unique pointer
+    /// @return The detached component, or nullptr if the component is not attached
     template <typename T>
     UniquePtr<T> DetachComponent() {
-        return this->DetachComponent(TypeIndex::Of<T>()).template Cast<T>();
+        return this->DoDetachComponent(TypeIndex::Of<T>()).template Cast<T>();
     }
 
     /// @brief Run the scheduler loop

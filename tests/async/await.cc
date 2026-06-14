@@ -4,8 +4,8 @@
 #include <type_traits>
 #include "timeout.hpp"
 
-using namespace lcore;
-using namespace lcore::async;
+using namespace LCORE_NAMESPACE;
+using namespace LCORE_NAMESPACE::async;
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

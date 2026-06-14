@@ -10,23 +10,33 @@ using namespace LCORE_NAMESPACE::async;
 
 // Scheduler
 
-void Scheduler::DoAttachComponent(TypeIndex typeIndex, UniquePtr<Component> component)
+bool Scheduler::DoAttachComponent(TypeIndex typeIndex, UniquePtr<Component> component)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto [it, inserted] = m_components.emplace(typeIndex, std::move(component));
-    if (!inserted) {
-        throw RuntimeError("Component of this type already exists in the scheduler.");
-    }
+    return inserted;
 }
 
-Component& Scheduler::DoGetComponent(TypeIndex typeIndex)
+RawPtr<Component> Scheduler::DoGetComponent(TypeIndex typeIndex) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_components.find(typeIndex);
     if (it == m_components.end()) {
-        throw RuntimeError("Component of this type does not exist in the scheduler.");
+        return nullptr;
     }
-    return *it->second.Get();
+    return it->second.Get();
+}
+
+UniquePtr<Component> Scheduler::DoDetachComponent(TypeIndex typeIndex)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_components.find(typeIndex);
+    if (it == m_components.end()) {
+        return nullptr;
+    }
+    UniquePtr<Component> component = std::move(it->second);
+    m_components.erase(it);
+    return component;
 }
 
 void Scheduler::Loop() {
@@ -67,7 +77,7 @@ void Scheduler::DoSchedule(Ptr<StateBase>&& state) {
     m_cv.notify_one();
 }
 
-Scheduler& Scheduler::GetThis() {
+Scheduler& Scheduler::GetInstance() {
     static thread_local Scheduler scheduler;
     static thread_local bool initialized = false;
     if (!initialized) {
@@ -79,7 +89,7 @@ Scheduler& Scheduler::GetThis() {
 }
 
 void Scheduler::Run() {
-    if (&Scheduler::GetThis() != this) {
+    if (&Scheduler::GetInstance() != this) {
         throw RuntimeError("Run function must be called from the thread that owns the scheduler.");
     }
     m_running = true;
@@ -92,19 +102,7 @@ void Scheduler::Run() {
         if (!m_running) return false;
         return !m_taskstates.empty() || !m_newtaskstates.empty();
     };
-    while (true) {
-        if (!checkContinue()) break;
-        Loop();
-        for (auto& [typeIndex, component] : m_components) {
-            component->Loop(*this);
-        }
-        if (!checkContinue()) break;
-
-
-        Component::Duration waitDuration = Component::Duration::max();
-        for (auto& [typeIndex, component] : m_components) {
-            waitDuration = std::min(waitDuration, component->GetNextEventDuration());
-        }
+    auto waitEventWithConditionVariable = [&, this](Component::Duration waitDuration) {
         bool needLoop = false;
         while (true) {
             std::unique_lock<std::mutex> lock(m_mutex);
@@ -122,7 +120,48 @@ void Scheduler::Run() {
                 lock.lock();
                 std::rethrow_exception(std::current_exception());
             }
-            if (needLoop) break;
+            if (needLoop) break; // Exit the loop if we have new tasks or events to handle
+        }
+        return needLoop;
+    };
+    auto waitEvent = [&, this]() {
+        bool needLoop = false;
+        while (!needLoop) { // Busy-waiting loop
+            // Handle events without waiting for condition variable, suitable for busy-waiting scenarios
+            std::unique_lock<std::mutex> lock(m_mutex);
+            needLoop = !m_newtaskstates.empty();
+            needLoop |= !checkContinueWithNoLock();
+            lock.unlock();
+            try {
+                for (auto& [typeIndex, component] : m_components) {
+                    if (component->HandleEvent(*this)) {
+                        needLoop = true;
+                    }
+                }
+            } catch (...) {
+                lock.lock();
+                std::rethrow_exception(std::current_exception());
+            }
+            // Exit busy-waiting loop if we have new tasks or events to handle
+        }
+        return needLoop;
+    };
+    while (true) {
+        if (!checkContinue()) break;
+        Loop();
+        for (auto& [typeIndex, component] : m_components) {
+            component->Loop(*this);
+        }
+        if (!checkContinue()) break;
+
+        if (this->waitForConditionVariable) {
+            Component::Duration waitDuration = Component::Duration::max();
+            for (auto& [typeIndex, component] : m_components) {
+                waitDuration = std::min(waitDuration, component->GetNextEventDuration());
+            }
+            waitEventWithConditionVariable(waitDuration);
+        } else {
+            waitEvent();
         }
     }
     m_running = false;
@@ -199,7 +238,7 @@ Lazy<void> async::Sleep(TimerComponent::Duration duration) {
 
         void await_resume() const noexcept {}
     };
-    co_await Awaiter{Scheduler::GetThis(), duration};
+    co_await Awaiter{Scheduler::GetInstance(), duration};
 }
 
 Lazy<void> async::SleepUntil(TimerComponent::TimePoint time) {
@@ -217,7 +256,7 @@ Lazy<void> async::SleepUntil(TimerComponent::TimePoint time) {
 
         void await_resume() const noexcept {}
     };
-    co_await Awaiter{Scheduler::GetThis(), time};
+    co_await Awaiter{Scheduler::GetInstance(), time};
 }
 
 Lazy<void> WrapTimeout(LazyTask<void> task, SharedPtr<bool> cancelled) {
@@ -227,7 +266,7 @@ Lazy<void> WrapTimeout(LazyTask<void> task, SharedPtr<bool> cancelled) {
 }
 
 std::function<void()> async::SetTimeout(TimerComponent::Duration duration, LazyTask<void>&& task) {
-    auto& scheduler = Scheduler::GetThis();
+    auto& scheduler = Scheduler::GetInstance();
     auto time = std::chrono::steady_clock::now() + duration;
     auto& timerComponent = scheduler.GetComponent<TimerComponent>();
     auto cancelled = MakeShared<bool>(false);

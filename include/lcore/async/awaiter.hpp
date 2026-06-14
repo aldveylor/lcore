@@ -15,7 +15,7 @@ struct CallbackAwaiter {
     using tuple_t = std::tuple<std::decay_t<Args>...>;
 
     Starter starter;
-    alignas(tuple_t) unsigned char storage[sizeof(tuple_t)];
+    alignas(tuple_t) unsigned char storage[sizeof(tuple_t)] = {};
     bool has_value = false;
 
     bool await_ready() noexcept { return false; }

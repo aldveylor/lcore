@@ -15,7 +15,7 @@ using Duration = SteadyClock::duration;
 TEST(Scheduler, Run)
 {
     auto _ = crash_after(1000ms);
-    Scheduler& scheduler = Scheduler::GetThis();
+    Scheduler& scheduler = Scheduler::GetInstance();
     bool executed1 = false;
     bool executed2 = false;
     scheduler.Schedule([&]()->Lazy<void> {
@@ -34,7 +34,7 @@ TEST(Scheduler, Run)
 TEST(TimeComponent, Sleep)
 {
     auto _ = crash_after(1000ms);
-    Scheduler& scheduler = Scheduler::GetThis();
+    Scheduler& scheduler = Scheduler::GetInstance();
     
     Duration elapsed = Duration::zero();
     scheduler.Schedule([&]()->Lazy<void> {
@@ -52,7 +52,7 @@ TEST(TimeComponent, Sleep)
 TEST(TimeComponent, SleepUntil)
 {
     auto _ = crash_after(1000ms);
-    Scheduler& scheduler = Scheduler::GetThis();
+    Scheduler& scheduler = Scheduler::GetInstance();
 
     Duration elapsed = Duration::zero();
     scheduler.Schedule([&]()->Lazy<void> {
@@ -69,7 +69,7 @@ TEST(TimeComponent, SleepUntil)
 TEST(TimeComponent, SetTimeout)
 {
     auto _ = crash_after(1000ms);
-    Scheduler& scheduler = Scheduler::GetThis();
+    Scheduler& scheduler = Scheduler::GetInstance();
 
     bool called = false;
     Duration elapsed = Duration::zero();
@@ -92,7 +92,7 @@ TEST(TimeComponent, SetTimeout)
 TEST(TimeComponent, SetTimeoutCancel)
 {
     auto _ = crash_after(1000ms);
-    Scheduler& scheduler = Scheduler::GetThis();
+    Scheduler& scheduler = Scheduler::GetInstance();
 
     bool called = false;
     bool called2 = false;
@@ -116,7 +116,7 @@ TEST(TimeComponent, SetTimeoutCancel)
 TEST(TimeComponent, SetInterval)
 {
     auto _ = crash_after(2000ms);
-    Scheduler& scheduler = Scheduler::GetThis();
+    Scheduler& scheduler = Scheduler::GetInstance();
 
     int count = 0;
 
