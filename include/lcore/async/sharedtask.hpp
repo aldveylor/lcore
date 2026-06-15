@@ -16,6 +16,7 @@ class EmptyStateException: public Exception {
     }
 };
 
+namespace _detail {
 struct StateBase {
     std::coroutine_handle<PromiseBase> handle;
     mutable std::mutex mutex;
@@ -61,6 +62,8 @@ struct StateBase {
         return nullptr;
     }
 };
+
+
 
 template <typename T, IsAwaitableImplement InitialSuspend, template <typename> typename TaskWrapper>
 struct State: public StateBase {
@@ -113,11 +116,12 @@ struct State: public StateBase {
         if(handle) get_handle().promise().add_waiter(h);
     }
 };
+}
 
 template <typename T, IsAwaitableImplement InitialSuspend, template <typename> typename TaskWrapper>
 class SharedTaskBase {
 public:
-    using StateType = State<T, InitialSuspend, TaskWrapper>;
+    using StateType = _detail::State<T, InitialSuspend, TaskWrapper>;
     using promise_type = typename StateType::PromiseType;
     struct sentinel{};
 protected:

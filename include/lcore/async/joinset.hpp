@@ -16,7 +16,7 @@ struct JoinResult {
 /// @brief A join set that can hold multiple tasks and wait for all of them to complete
 template <typename T>
 class JoinSet {
-    List<Task<T>> tasks;
+    List<Lazy<T>> tasks;
     mutable std::mutex mtx;
     std::deque<JoinResult<T>> completed;
     std::deque<std::coroutine_handle<>> waiters;
@@ -28,7 +28,7 @@ public:
             LCORE_LOG("[Warning] JoinSet destroyed with unfinished tasks");
         }
     }
-    void spawn(Task<T>&& task) {
+    void spawn(Lazy<T>&& task) {
         std::lock_guard<std::mutex> lock(mtx);
         tasks.push_back(std::move(task));
     }

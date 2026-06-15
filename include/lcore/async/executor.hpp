@@ -19,6 +19,8 @@ LCORE_ASYNC_NAMESPACE_BEGIN
 class Component;
 
 class Scheduler {
+    using StateBase = _detail::StateBase;
+
     std::map<TypeIndex, UniquePtr<Component>> m_components;
     List<Ptr<StateBase>> m_taskstates;
     List<Ptr<StateBase>> m_newtaskstates;

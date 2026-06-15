@@ -1,168 +1,166 @@
 #pragma once
-#include "base.hpp"
-#include "lcore/exception.hpp"
+#include "exception.hpp"
+#include "memory.hpp"
 #include <mutex>
 #include <condition_variable>
 #include <vector>
 #include <functional>
+#include <optional>
 
 LCORE_NAMESPACE_BEGIN
 
-template <typename T>
-class Promise;
+namespace _detail {
 
 template <typename T>
-class Future {
-    Promise<T>& m_promise;
-public:
-    using ValueType = T;
-    using Args = typename Promise<T>::Args;
-    using CallbackType = typename Promise<T>::CallbackType;
-
-    Future(Promise<T>& promise) : m_promise(promise) {}
-    bool Then(CallbackType&& callback) {
-        return m_promise.Then(std::forward<CallbackType>(callback));
-    }
-    bool Wait() { return m_promise.Wait(); }
-    T Get() requires(CopyConstructible<T> && MoveConstructible<T>) {
-        if (m_promise.Done()) throw RuntimeError("Promise already fulfilled");
-        T result;
-        m_promise.Then([&result](Args value) {
-            result = value;
-        });
-        Wait();
-        return result;
-    }
-};
-
-template <typename T>
-class Promise {
-public:
-    using FutureType = Future<T>;
+struct PromiseState {
     using Args = std::conditional_t<
         std::is_trivially_copyable_v<T> && sizeof(T) <= sizeof(void*),
         T,
         const T&
     >;
     using CallbackType = std::function<void(Args)>;
-private:
-    bool m_done;
-    std::mutex m_mutex;
-    std::condition_variable m_cond;
-    std::vector<CallbackType> m_callbacks;
-public:
-    Promise() : m_done(false) {}
 
+    std::optional<T> value;
+    std::vector<CallbackType> callbacks;
+    std::mutex mutex;
+    std::condition_variable cond;
+    
     void Complete(Args value) {
         std::vector<CallbackType> _callbacks;
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_done) throw RuntimeError("Promise already fulfilled");
-            m_done = true;
-            m_callbacks.swap(_callbacks);
+            std::lock_guard<std::mutex> lock(mutex);
+            if (this->value.has_value()) throw RuntimeError("Promise already fulfilled");
+            this->value = value;
+            _callbacks.swap(callbacks);
         }
         for (const auto& callback : _callbacks) {
             callback(value);
         }
-        m_cond.notify_all();
+        cond.notify_all();
     }
 
-    bool Then(CallbackType callback) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_done) return false;
-        m_callbacks.push_back(callback);
-        return true;
+    void Wait() {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (value.has_value()) return;
+        cond.wait(lock, [this] { return value.has_value(); });
     }
 
-    bool Wait() {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if (m_done) return false;
-        m_cond.wait(lock, [this] { return m_done; });
-        return true;
+    bool Done() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return value.has_value();
     }
 
-    Future<T> GetFuture() {
-        return Future<T>(*this);
+    Args Get() {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (value.has_value()) return *value;
+        cond.wait(lock, [this] { return value.has_value(); });
+        return *value;
+    }
+
+    void Then(CallbackType callback) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (value.has_value()) {
+            callback(*value);
+        } else {
+            callbacks.push_back(callback);
+        }
     }
 };
 
 template <>
-class Promise<void> {
-public:
-    using FutureType = Future<void>;
+struct PromiseState<void> {
     using Args = void;
     using CallbackType = std::function<void()>;
+    
+    bool done;
+    std::vector<CallbackType> callbacks;
+    std::mutex mutex;
+    std::condition_variable cond;
+
+    PromiseState() : done(false) {}
+    void Complete() {
+        std::vector<CallbackType> _callbacks;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (done) throw RuntimeError("Promise already fulfilled");
+            done = true;
+            _callbacks.swap(callbacks);
+        }
+        for (const auto& callback : _callbacks) {
+            callback();
+        }
+        cond.notify_all();
+    }
+
+    void Wait() {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (done) return;
+        cond.wait(lock, [this] { return done; });
+    }
+
+    bool Done() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return done;
+    }
+
+    void Then(CallbackType callback) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (done) {
+            callback();
+        } else {
+            callbacks.push_back(callback);
+        }
+    }
+};
+}
+
+template <typename T>
+class Future;
+
+template <typename T>
+class Promise {
+public:
+    using StateType = _detail::PromiseState<T>;
+    using Args = typename StateType::Args;
+    using CallbackType = typename StateType::CallbackType;
 private:
-    bool m_done;
-    std::mutex m_mutex;
-    std::condition_variable m_cond;
-    std::vector<CallbackType> m_callbacks;
+    SharedPtr<StateType> state;
 public:
-    inline Promise() : m_done(false) {}
+    Promise() : state(MakeShared<StateType>()) {}
 
-    inline void SetValue();
-    inline bool Then(CallbackType callback);
-    inline bool Wait();
-    inline bool Done();
+    void Complete(Args value) {
+        state->Complete(value);
+    }
 
-    inline Future<void> GetFuture();
+    Future<T> GetFuture() const {
+        return Future<T>(state);
+    }
 };
 
-template <>
-class Future<void> {
-    Promise<void>& m_promise;
+template <typename T>
+class Future {
+    friend class Promise<T>;
 public:
-    using ValueType = void;    
-    using CallbackType = typename Promise<void>::CallbackType;
-    using Args = typename Promise<void>::Args;
-
-    inline Future(Promise<void>& promise) : m_promise(promise) {}
-    inline bool Then(std::function<void()> callback);
-    inline bool Wait();
+    using StateType = _detail::PromiseState<T>;
+    using Args = typename StateType::Args;
+    using CallbackType = typename StateType::CallbackType;
+private:
+    SharedPtr<StateType> state;
+protected:
+    Future(SharedPtr<StateType> state) : state(std::move(state)) {}
+public:
+    void Wait() const {
+        state->Wait();
+    }
+    auto Get() const requires (!Void<T>) {
+        return state->Get();
+    }
+    bool Done() const {
+        return state->Done();
+    }
+    void Then(CallbackType callback) const {
+        state->Then(std::move(callback));
+    }
 };
-
-inline void Promise<void>::SetValue() {
-    std::vector<CallbackType> _callbacks;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_done) throw RuntimeError("Promise already fulfilled");
-        m_done = true;
-        m_callbacks.swap(_callbacks);
-    }
-    for (const auto& callback : _callbacks) {
-        callback();
-    }
-    m_cond.notify_all();
-}
-
-inline bool Promise<void>::Then(CallbackType callback) {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_done) return false;
-    m_callbacks.push_back(callback);
-    return true;
-}
-
-inline bool Promise<void>::Wait() {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    if (m_done) return false;
-    m_cond.wait(lock, [this] { return m_done; });
-    return true;
-}
-
-inline bool Promise<void>::Done() {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_done;
-}
-
-inline Future<void> Promise<void>::GetFuture() {
-    return Future<void>(*this);
-}
-
-inline bool Future<void>::Then(std::function<void()> callback) {
-    return m_promise.Then(callback);
-}
-inline bool Future<void>::Wait() {
-    return m_promise.Wait();
-}
 
 LCORE_NAMESPACE_END
