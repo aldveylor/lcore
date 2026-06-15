@@ -156,3 +156,25 @@ TEST(AwaiterTest, WhenAllWithExceptionTest) {
     scheduler.Schedule(std::move(whenall));
     scheduler.Run();
 }
+
+TEST(AwaiterTest, WhenAllWithContainer) {
+    auto _ = crash_after(5s);
+
+    Scheduler& scheduler = Scheduler::GetInstance();
+    auto whenall = [&]()-> Lazy<void> {
+        std::vector<Lazy<int>> tasks;
+        for (int i = 0; i < 5; ++i) {
+            tasks.push_back([i]() -> Lazy<int> {
+                co_await Sleep(100ms);
+                co_return i * i;
+            }());
+        }
+        auto results = co_await WhenAll(std::move(tasks));
+        EXPECT_EQ(results.size(), 5);
+        for (size_t i = 0; i < results.size(); ++i) {
+            EXPECT_EQ(results[i], static_cast<int>(i * i));
+        }
+    }();
+    scheduler.Schedule(std::move(whenall));
+    scheduler.Run();
+}

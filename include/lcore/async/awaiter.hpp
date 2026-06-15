@@ -122,6 +122,19 @@ public:
 
 namespace _detail {
 
+    
+template <typename T>
+bool atomic_set_if_not(std::atomic<T>& atomic, T bad, T value) {
+    T current = atomic.load(std::memory_order_relaxed);
+    while (current != bad) {
+        if (atomic.compare_exchange_weak(current, value, std::memory_order_release, std::memory_order_relaxed)) {
+            return true;
+        }
+        // Failed to set, current is updated with the latest value of atomic, check if it's still not bad
+    }
+    return false; // atomic already has the bad value, failed to set
+};
+
 template <typename... Awaiter>
 struct WhenAllAwaiterWrapper {
     using ResultTuple = std::tuple<ReplaceIf<GetAwaitResult<Awaiter>, void, Monostate>...>;
@@ -157,13 +170,15 @@ struct WhenAllAwaiterWrapper {
                     std::get<I>(results) = std::move(res);
                 }
             } catch (...) {
-                std::unique_lock lock(mutex);
-                exception = std::current_exception();
-                lock.unlock();
+                {
+                   std::lock_guard lock(mutex);
+                    if (exception) co_return; // An exception has already been recorded, no need to resume again
+                    exception = std::current_exception();
+                }
                 handle.resume();
                 co_return;
             }
-            if (--count == 0) {
+            if (--count == 0 && !exception) {
                 handle.resume();
             }
         }(std::forward<A>(awt)));
@@ -189,6 +204,9 @@ template <typename... Awaiter>
 struct WhenAnyAwaiterWrapper {
     std::tuple<Awaiter...> awaiters;
     std::tuple<std::optional<ReplaceIf<GetAwaitResult<Awaiter>, void, Monostate>>...> results;
+    // Use shared_ptr to avoid the lifetime issue of WhenAnyAwaiterWrapper
+    // WhenAnyAwaiterWrapper may be destroyed when some of the awaiters is still running
+    // but the ready_index and exception must be valid until the coroutine is resumed
     std::shared_ptr<std::atomic<int>> ready_index = std::make_shared<std::atomic<int>>(-1);
     std::exception_ptr exception;
     std::coroutine_handle<> handle;
@@ -244,18 +262,6 @@ struct WhenAnyAwaiterWrapper {
     }
 };
 
-template <typename T>
-bool atomic_set_if_not(std::atomic<T>& atomic, T bad, T value) {
-    T current = atomic.load(std::memory_order_relaxed);
-    while (current != bad) {
-        if (atomic.compare_exchange_weak(current, value, std::memory_order_release, std::memory_order_relaxed)) {
-            return true;
-        }
-        // Failed to set, current is updated with the latest value of atomic, check if it's still not bad
-    }
-    return false; // atomic already has the bad value, failed to set
-};
-
 }
 
 /// @brief Waits for all awaitables to complete and returns their results as a tuple.
@@ -299,15 +305,15 @@ inline auto WhenAll(AwaitableContainer&& container) {
                         std::lock_guard lock(mutex);
                         results[i] = std::move(res);
                     } catch (...) {
-                        if (_detail::atomic_set_if_not<size_t>(count, 0, 0)) { // Only the first exception will be recorded, and it will prevent the coroutine from being resumed multiple times
-                            std::unique_lock lock(mutex);
+                        {
+                            std::lock_guard lock(mutex);
+                            if (exception) co_return; // An exception has already been recorded, no need to resume again
                             exception = std::current_exception();
-                            lock.unlock();
-                            handle.resume();
                         }
+                        handle.resume();
                         co_return;
                     }
-                    if (--count == 0) {
+                    if (--count == 0 && !exception) {
                         handle.resume();
                     }
                 }(std::move(awaitables[i])));
@@ -323,6 +329,7 @@ inline auto WhenAll(AwaitableContainer&& container) {
         }
     };
     struct AwaiterVoid {
+        std::mutex mutex;
         AwaitableContainer awaitables;
         std::atomic<size_t> count;
         std::coroutine_handle<> handle;
@@ -338,14 +345,15 @@ inline auto WhenAll(AwaitableContainer&& container) {
                     try {
                         co_await std::move(awt);
                     } catch (...) {
-                        if (_detail::atomic_set_if_not<size_t>(count, 0, 0)) { // Only the first exception will be recorded, and it will prevent the coroutine from being resumed multiple times
-                            // No need to lock, the atomic has already guaranteed that no other thread is writing to exception
+                        {
+                            std::lock_guard lock(mutex);
+                            if (exception) co_return; // An exception has already been recorded, no need to
                             this->exception = std::current_exception();
-                            handle.resume();
                         }
+                        handle.resume();
                         co_return;
                     }
-                    if (--count == 0) {
+                    if (--count == 0 && !exception) {
                         handle.resume();
                     }
                 }(std::move(awaitables[i])));
@@ -360,6 +368,92 @@ inline auto WhenAll(AwaitableContainer&& container) {
     }
 };
 
+template <Iterable AwaitableContainer>
+requires (IsAwaitable<typename std::decay_t<AwaitableContainer>::value_type>)
+inline auto WhenAny(AwaitableContainer&& container) {
+    using AwaiterType = typename std::decay_t<AwaitableContainer>::value_type;
+    using ResultType = GetAwaitResult<AwaiterType>;
+    struct AwaiterNotVoid {
+        AwaitableContainer awaitables;
+        std::vector<std::optional<ResultType>> results;
+        std::shared_ptr<std::atomic<int>> ready_index = std::make_shared<std::atomic<int>>(-1);
+        std::exception_ptr exception;
+        std::coroutine_handle<> handle;
+        Scheduler& scheduler = Scheduler::GetInstance();
+
+        AwaiterNotVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)), results(awaitables.size()) {}
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<> h) {
+            this->handle = h;
+            for (size_t i = 0; i < awaitables.size(); ++i) {
+                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                    try {
+                        results[i] = co_await std::move(awt); // Setting different index won't cause data race
+                    } catch (...) {
+                        int expected = -1;
+                        if (ready_index->compare_exchange_strong(expected, i)) {
+                            exception = std::current_exception();
+                            handle.resume();
+                        }
+                        co_return;
+                    }
+                    int expected = -1;
+                    if (ready_index->compare_exchange_strong(expected, i)) {
+                        handle.resume();
+                    }
+                }(std::move(awaitables[i])));
+            }
+        }
+        auto await_resume() {
+            if (exception) std::rethrow_exception(exception);
+            int index = ready_index->load();
+            if (index < 0) throw RuntimeError("No awaiter is ready");
+            return std::make_pair(index, std::move(this->results[index]));
+        }
+    };
+    struct AwaiterVoid {
+        AwaitableContainer awaitables;
+        std::shared_ptr<std::atomic<int>> ready_index = std::make_shared<std::atomic<int>>(-1);
+        std::exception_ptr exception;
+        std::coroutine_handle<> handle;
+        Scheduler& scheduler = Scheduler::GetInstance();
+
+        AwaiterVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)) {}
+        bool await_ready() const noexcept { return false; }
+        void await_suspend(std::coroutine_handle<> h) {
+            this->handle = h;
+            for (size_t i = 0; i < awaitables.size(); ++i) {
+                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                    try {
+                        co_await std::move(awt);
+                    } catch (...) {
+                        int expected = -1;
+                        if (ready_index->compare_exchange_strong(expected, i)) {
+                            exception = std::current_exception();
+                            handle.resume();
+                        }
+                        co_return;
+                    }
+                    int expected = -1;
+                    if (ready_index->compare_exchange_strong(expected, i)) {
+                        handle.resume();
+                    }
+                }(std::move(awaitables[i])));
+            }
+        }
+        auto await_resume() {
+            if (exception) std::rethrow_exception(exception);
+            int index = ready_index->load();
+            if (index < 0) throw RuntimeError("No awaiter is ready");
+            return index;
+        }
+    };
+    if constexpr (Void<ResultType>) {
+        return AwaiterVoid(std::forward<AwaitableContainer>(container));
+    } else {
+        return AwaiterNotVoid(std::forward<AwaitableContainer>(container));
+    }
+};
 
 }
 LCORE_NAMESPACE_END
