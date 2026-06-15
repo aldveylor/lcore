@@ -191,7 +191,7 @@ AsyncFile::AsyncFile(const std::filesystem::path& path, Mode mode, Flags flags, 
     }
 }
 AsyncFile::~AsyncFile() {
-    if (this->m_fd >= 0) {
+    if (m_ownership && this->m_fd >= 0) {
         if (close(this->m_fd) < 0) {
             std::cerr << "Warning: Failed to close file descriptor " << this->m_fd << ": " << strerror(errno) << std::endl;
         }
@@ -211,6 +211,11 @@ AsyncFile& AsyncFile::operator=(AsyncFile&& other) noexcept {
         other.m_fd = -1; // Invalidate the moved-from object
     }
     return *this;
+}
+AsyncFile AsyncFile::FromFD(int fd, bool takeOwnership) {
+    AsyncFile file(fd);
+    file.m_ownership = takeOwnership; // Only close if we take ownership
+    return file;
 }
 
 struct CQEAwaiter {

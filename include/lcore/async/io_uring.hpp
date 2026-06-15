@@ -99,6 +99,7 @@ enum class SeekWhence {
 
 class AsyncFile {
     int m_fd = -1;
+    bool m_ownership = true;
     Offset m_current_offset = 0;
 protected:
     AsyncFile(int fd): m_fd(fd) {}
@@ -119,6 +120,8 @@ public:
 
     AsyncFile& operator=(const AsyncFile&) = delete;
     AsyncFile& operator=(AsyncFile&& other) noexcept;
+
+    static AsyncFile FromFD(int fd, bool take_ownership = false);
 
     int GetFD() const { return m_fd; }
     Lazy<std::size_t> Read(Span<char> buffer);
