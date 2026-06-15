@@ -297,16 +297,22 @@ Lazy<void> AsyncFile::Close() && {
 }
 
 Lazy<std::size_t> AsyncFile::Read(Span<char> buffer) {
+    AsyncLockGuard guard(this->m_mutex);
+    co_await guard;
     auto bytesRead = co_await this->ReadAt(m_current_offset, buffer);
     this->m_current_offset += bytesRead;
     co_return bytesRead;
 }
 Lazy<std::size_t> AsyncFile::Write(Span<const char> buffer) {
+    AsyncLockGuard guard(this->m_mutex);
+    co_await guard;
     auto bytesWritten = co_await this->WriteAt(m_current_offset, buffer);
     this->m_current_offset += bytesWritten;
     co_return bytesWritten;
 }
 Lazy<void> AsyncFile::Seek(Offset offset, SeekWhence whence) {
+    AsyncLockGuard guard(this->m_mutex);
+    co_await guard;
     if (offset == 0) {
         if (whence == SeekWhence::Current) {
             co_return; // No need to seek if offset is 0 and whence is current

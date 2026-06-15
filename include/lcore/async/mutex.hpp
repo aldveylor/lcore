@@ -62,10 +62,24 @@ public:
 template <typename MutexType = AsyncMutex>
 class AsyncLockGuard {
     MutexType& m_mutex;
+#ifdef LCORE_DEBUG
+    mutable bool m_locked = false;
+#endif
 public:
     explicit AsyncLockGuard(MutexType& mutex) : m_mutex(mutex){};
-    ~AsyncLockGuard() { m_mutex.unlock(); }
+    ~AsyncLockGuard() {
+#ifdef LCORE_DEBUG
+        if (!m_locked) {
+            // User forgot to co_await the guard, which means the mutex was never locked
+            LCORE_ERROR("AsyncLockGuard was not awaited, mutex was never locked");
+        }
+#endif
+        m_mutex.unlock(); 
+    }
     auto operator co_await() const & noexcept {
+#ifdef LCORE_DEBUG
+        m_locked = true;
+#endif
         return m_mutex.lock();
     }
 };
@@ -74,14 +88,26 @@ template <typename MutexType = AsyncMutex>
 class AsyncUniqueLock {
     MutexType& m_mutex;
     bool m_owns_lock = false;
+#ifdef LCORE_DEBUG
+    mutable bool m_has_awaited = false;
+#endif
 public:
     explicit AsyncUniqueLock(MutexType& mutex) : m_mutex(mutex){};
     ~AsyncUniqueLock() {
+#ifdef LCORE_DEBUG
+        if (!m_has_awaited) {
+            // User forgot to co_await the lock, which means the mutex was never locked
+            LCORE_ERROR("AsyncUniqueLock was not awaited, mutex was never locked");
+        }
+#endif
         if (m_owns_lock) {
             m_mutex.unlock();
         }
     }
     auto operator co_await() & noexcept {
+#ifdef LCORE_DEBUG
+        this->m_has_awaited = true;
+#endif
         if (m_owns_lock) {
             throw LogicError("Lock already owned");
         }

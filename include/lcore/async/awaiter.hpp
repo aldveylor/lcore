@@ -145,10 +145,17 @@ struct WhenAllAwaiterWrapper {
     std::tuple<std::optional<ReplaceIf<GetAwaitResult<Awaiter>, void, Monostate>>...> results;
     std::exception_ptr exception;
     std::atomic<std::size_t> count{ sizeof...(Awaiter) };
+    std::atomic<bool> resumed{ false };
     std::coroutine_handle<> handle;
     Scheduler& scheduler = Scheduler::GetInstance();
 
     WhenAllAwaiterWrapper(Awaiter&&... awts) : awaiters(std::move(awts)...) {}
+    void resume() {
+        bool expected = false;
+        if (resumed.compare_exchange_strong(expected, true)) {
+            handle.resume();
+        }
+    }
 
     template<std::size_t... I, class... Awts>
     void schedule_all(std::index_sequence<I...>, Awts&&... awts){
@@ -171,15 +178,15 @@ struct WhenAllAwaiterWrapper {
                 }
             } catch (...) {
                 {
-                   std::lock_guard lock(mutex);
+                    std::lock_guard lock(mutex);
                     if (exception) co_return; // An exception has already been recorded, no need to resume again
                     exception = std::current_exception();
                 }
-                handle.resume();
+                resume();
                 co_return;
             }
-            if (--count == 0 && !exception) {
-                handle.resume();
+            if (--count == 0) {
+                resume();
             }
         }(std::forward<A>(awt)));
     }
@@ -290,16 +297,24 @@ inline auto WhenAll(AwaitableContainer&& container) {
         AwaitableContainer awaitables;
         std::vector<std::optional<ResultType>> results;
         std::atomic<size_t> count;
+        std::atomic<bool> resumed{ false };
         std::exception_ptr exception;
         std::coroutine_handle<> handle;
         Scheduler& scheduler = Scheduler::GetInstance();
 
         AwaiterNotVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)), results(awaitables.size()), count(awaitables.size()) {}
+        void resume() {
+            bool expected = false;
+            if (resumed.compare_exchange_strong(expected, true)) {
+                handle.resume();
+            }
+        }
+        
         bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) {
             this->handle = h;
             for (size_t i = 0; i < awaitables.size(); ++i) {
-                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                scheduler.Schedule([this](AwaiterType awt, auto i) -> Lazy<void> {
                     try {
                         auto res = co_await std::move(awt);
                         std::lock_guard lock(mutex);
@@ -310,13 +325,13 @@ inline auto WhenAll(AwaitableContainer&& container) {
                             if (exception) co_return; // An exception has already been recorded, no need to resume again
                             exception = std::current_exception();
                         }
-                        handle.resume();
+                        resume();
                         co_return;
                     }
-                    if (--count == 0 && !exception) {
-                        handle.resume();
+                    if (--count == 0) {
+                        resume();
                     }
-                }(std::move(awaitables[i])));
+                }(std::move(awaitables[i]), i));
             }
         }
         auto await_resume() {
@@ -332,31 +347,40 @@ inline auto WhenAll(AwaitableContainer&& container) {
         std::mutex mutex;
         AwaitableContainer awaitables;
         std::atomic<size_t> count;
+        std::atomic<bool> resumed{ false };
         std::coroutine_handle<> handle;
         std::exception_ptr exception;
         Scheduler& scheduler = Scheduler::GetInstance();
 
         AwaiterVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)), count(awaitables.size()) {}
+        void resume() {
+            bool expected = false;
+            if (resumed.compare_exchange_strong(expected, true)) {
+                handle.resume();
+            }
+        }
+        
         bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) {
             this->handle = h;
             for (size_t i = 0; i < awaitables.size(); ++i) {
-                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                scheduler.Schedule([this](AwaiterType awt, auto i) -> Lazy<void> {
                     try {
                         co_await std::move(awt);
                     } catch (...) {
+                        count = 0;
                         {
                             std::lock_guard lock(mutex);
                             if (exception) co_return; // An exception has already been recorded, no need to
                             this->exception = std::current_exception();
                         }
-                        handle.resume();
+                        resume();
                         co_return;
                     }
-                    if (--count == 0 && !exception) {
-                        handle.resume();
+                    if (--count == 0) {
+                        resume();
                     }
-                }(std::move(awaitables[i])));
+                }(std::move(awaitables[i]), i));
             }
         }
         void await_resume() const noexcept { if (exception) std::rethrow_exception(exception); }
@@ -378,30 +402,28 @@ inline auto WhenAny(AwaitableContainer&& container) {
         std::vector<std::optional<ResultType>> results;
         std::shared_ptr<std::atomic<int>> ready_index = std::make_shared<std::atomic<int>>(-1);
         std::exception_ptr exception;
-        std::coroutine_handle<> handle;
         Scheduler& scheduler = Scheduler::GetInstance();
 
         AwaiterNotVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)), results(awaitables.size()) {}
         bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<> h) {
-            this->handle = h;
             for (size_t i = 0; i < awaitables.size(); ++i) {
-                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                scheduler.Schedule([this](AwaiterType awt, auto i, auto h) mutable -> Lazy<void> {
                     try {
                         results[i] = co_await std::move(awt); // Setting different index won't cause data race
                     } catch (...) {
                         int expected = -1;
                         if (ready_index->compare_exchange_strong(expected, i)) {
                             exception = std::current_exception();
-                            handle.resume();
+                            h.resume();
                         }
                         co_return;
                     }
                     int expected = -1;
                     if (ready_index->compare_exchange_strong(expected, i)) {
-                        handle.resume();
+                        h.resume();
                     }
-                }(std::move(awaitables[i])));
+                }(std::move(awaitables[i]), i, h));
             }
         }
         auto await_resume() {
@@ -415,7 +437,6 @@ inline auto WhenAny(AwaitableContainer&& container) {
         AwaitableContainer awaitables;
         std::shared_ptr<std::atomic<int>> ready_index = std::make_shared<std::atomic<int>>(-1);
         std::exception_ptr exception;
-        std::coroutine_handle<> handle;
         Scheduler& scheduler = Scheduler::GetInstance();
 
         AwaiterVoid(AwaitableContainer&& cont) : awaitables(std::move(cont)) {}
@@ -423,22 +444,22 @@ inline auto WhenAny(AwaitableContainer&& container) {
         void await_suspend(std::coroutine_handle<> h) {
             this->handle = h;
             for (size_t i = 0; i < awaitables.size(); ++i) {
-                scheduler.Schedule([this, i](AwaiterType awt) mutable -> Lazy<void> {
+                scheduler.Schedule([this](AwaiterType awt, auto i, auto h) mutable -> Lazy<void> {
                     try {
                         co_await std::move(awt);
                     } catch (...) {
                         int expected = -1;
                         if (ready_index->compare_exchange_strong(expected, i)) {
                             exception = std::current_exception();
-                            handle.resume();
+                            h.resume();
                         }
                         co_return;
                     }
                     int expected = -1;
                     if (ready_index->compare_exchange_strong(expected, i)) {
-                        handle.resume();
+                        h.resume();
                     }
-                }(std::move(awaitables[i])));
+                }(std::move(awaitables[i]), i, h));
             }
         }
         auto await_resume() {

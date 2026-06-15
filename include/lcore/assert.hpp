@@ -35,4 +35,5 @@
 #define LCORE_ASSERT(condition, msg) do {} while (0)
 #endif
 
-#define LCORE_FATAL(msg) do {std::cerr << msg << std::endl; exit(-1);} while (0)
+#define LCORE_ERROR(msg) LCORE_LOG("Error: " << msg)
+#define LCORE_FATAL(msg) do {LCORE_LOG("Fatal: " << msg); exit(-1);} while (0)

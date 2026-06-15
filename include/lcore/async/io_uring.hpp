@@ -3,6 +3,7 @@
 #error "io_uring is only supported on Linux"
 #else
 #include "executor.hpp"
+#include "mutex.hpp"
 #include "lcore/enum.hpp"
 #include "lcore/container/view.hpp"
 #include "lcore/string.hpp"
@@ -101,6 +102,7 @@ class AsyncFile {
     int m_fd = -1;
     bool m_ownership = true;
     Offset m_current_offset = 0;
+    AsyncMutex m_mutex;
 protected:
     AsyncFile(int fd): m_fd(fd) {}
 public:

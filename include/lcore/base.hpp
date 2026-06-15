@@ -18,6 +18,10 @@
 // #define LCORE_NAMESPACE_END }
 #include "config.h"
 
+#ifdef LCORE_BUDEG
+#include "assert.hpp"
+#endif
+
 #include "traits.hpp"
 #include "rawptr.hpp"
 #include "class.hpp"

@@ -110,12 +110,23 @@ public:
 template <typename MutexType = SharedMutex>
 class SharedLock {
     MutexType& mutex;
+#ifdef LCORE_DEBUG
+    bool m_has_awaited = false;
+#endif
 public:
     SharedLock(MutexType& mutex) noexcept : mutex(mutex) {}
     ~SharedLock() noexcept {
+#ifdef LCORE_DEBUG
+        if (!m_has_awaited) {
+            LCORE_ERROR("SharedLock was destroyed without awaiting");
+        }
+#endif
         mutex.unlock_shared();
     }
-    auto operator co_await() noexcept {
+    auto operator co_await() & noexcept {
+#ifdef LCORE_DEBUG
+        m_has_awaited = true;
+#endif
         return mutex.lock_shared();
     }
 };

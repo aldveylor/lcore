@@ -42,6 +42,11 @@ public:
     }
 
     ~TaskBase() {
+#ifdef LCORE_DEBUG
+        if (handle && !handle.done()) {
+            LCORE_ERROR("Destroying a Task whose coroutine is not finished. This may cause resource leaks or undefined behavior.");
+        }
+#endif
         if(handle) handle.destroy();
     }
 

@@ -164,10 +164,10 @@ TEST(AwaiterTest, WhenAllWithContainer) {
     auto whenall = [&]()-> Lazy<void> {
         std::vector<Lazy<int>> tasks;
         for (int i = 0; i < 5; ++i) {
-            tasks.push_back([i]() -> Lazy<int> {
+            tasks.push_back([](auto i) -> Lazy<int> {
                 co_await Sleep(100ms);
                 co_return i * i;
-            }());
+            }(i));
         }
         auto results = co_await WhenAll(std::move(tasks));
         EXPECT_EQ(results.size(), 5);
