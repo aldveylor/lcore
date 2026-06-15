@@ -128,8 +128,12 @@ private:
 public:
     Promise() : state(MakeShared<StateType>()) {}
 
-    void Complete(Args value) {
+    void Complete(ReplaceIf<Args, void, Monostate> value) requires (!Void<T>) {
         state->Complete(value);
+    }
+
+    void Complete() requires Void<T> {
+        state->Complete();
     }
 
     Future<T> GetFuture() const {

@@ -2,6 +2,7 @@
  * @file executor.hpp
  * @brief Task executor
  */
+#pragma once
 #include "base.hpp"
 #include "lcore/traits.hpp"
 #include "lcore/container/list.hpp"
