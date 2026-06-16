@@ -28,6 +28,8 @@ private:
     io_uring m_ring;
 
     bool m_running;
+    std::mutex m_running_mutex;
+    std::condition_variable m_running_cv;
 
     uint64_t m_next_operation_id;
 
@@ -100,11 +102,11 @@ enum class SeekWhence {
 
 class AsyncFile {
     int m_fd = -1;
-    bool m_ownership = true;
     Offset m_current_offset = 0;
+    bool m_ownership;
     AsyncMutex m_mutex;
 protected:
-    AsyncFile(int fd): m_fd(fd) {}
+    AsyncFile(int fd): m_fd(fd), m_ownership(false) {}
 public:
     using Mode = OpenMode;
     using Flags = FileFlags;

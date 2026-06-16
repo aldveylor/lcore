@@ -17,6 +17,10 @@
 #include <vector>
 #include "string.hpp"
 
+#ifdef LCORE_DEBUG
+#define ENABLE_LOGDEBUG
+#endif
+
 LCORE_NAMESPACE_BEGIN
 
 namespace _detail {
@@ -275,7 +279,11 @@ LCORE_NAMESPACE_END
     method(ss.str(), __LINE__, __FUNCTION__);                       \
 } while(0)
 
+#ifdef ENABLE_LOGDEBUG
 #define LOGSTREAM_DEBUG(message) _LOGSTREAM_LOG(message, logger.Debug, LCORE_NAMESPACE::log::Level::Debug)
+#else
+#define LOGSTREAM_DEBUG(message) do {} while(0)
+#endif
 #define LOGSTREAM_INFO(message) _LOGSTREAM_LOG(message, logger.Info, LCORE_NAMESPACE::log::Level::Info)
 #define LOGSTREAM_WARNING(message) _LOGSTREAM_LOG(message, logger.Warning, LCORE_NAMESPACE::log::Level::Warning)
 #define LOGSTREAM_ERROR(message) _LOGSTREAM_LOG(message, logger.Error, LCORE_NAMESPACE::log::Level::Error)
@@ -304,9 +312,39 @@ LCORE_NAMESPACE_END
     __asm__ __volatile__ ("int $3");                            \
 } while(0)
 
-#define ASSERT_FATAL_IF(condition) do {                         \
+#define ASSERT_FATAL_IF(condition, message) do {                         \
     if (!(condition)){                                           \
-        LOGSTREAM_FATAL("Failed to assert: " << #condition);     \
+        LOGSTREAM_FATAL("Failed to assert: " << #condition << " => " << message);     \
         __asm__ __volatile__("int $3");                         \
     }                                                           \
 } while(0)
+
+/**
+
+Usage example:
+
+In the source file (.cc or .cpp):
+```cpp
+#include "logger.hpp"
+USE_LOGGER("MySourceFile")
+
+int main() {
+
+
+    LOG_DEBUG("This is a debug message");
+    LOG_INFO("This is an info message");
+    LOG_WARNING("This is a warning message");
+    LOG_ERROR("This is an error message");
+    LOG_FATAL("This is a fatal message");
+
+    int x = 42;
+    LOG_PARAMETERS(x);
+    LOG_FUNCTION(x);
+
+    ASSERT_FATAL_IF(x != 42, "x should be 42");
+
+    return 0;
+}
+```
+
+ */

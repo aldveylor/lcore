@@ -1,3 +1,4 @@
+#pragma once
 #include "base.hpp"
 
 #if __cplusplus >= 202300L
@@ -18,8 +19,6 @@
 // Version 1.0.
 // (See accompanying file LICENSE or http://www.boost.org/LICENSE_1_0.txt)
 ///////////////////////////////////////////////////////////////////////////////
-
-#pragma once
 
 #if __has_include(<coroutine>)
 #include <coroutine>

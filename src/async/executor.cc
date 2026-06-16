@@ -11,6 +11,7 @@ using namespace LCORE_NAMESPACE::async;
 // Scheduler
 
 Scheduler::~Scheduler() {
+    LCORE_ASSERT_ERROR(!m_running, "Scheduler must be stopped before destruction.");
     std::unique_lock<std::mutex> lock(m_mutex);
     for (auto& [typeIndex, component] : m_components) {
         lock.unlock();
@@ -105,6 +106,8 @@ void Scheduler::DoSchedule(Ptr<StateBase>&& state) {
     m_cv.notify_one();
 }
 
+#include <pthread.h>
+
 Scheduler& Scheduler::GetInstance() {
     static thread_local Scheduler scheduler;
     static thread_local bool initialized = false;
@@ -120,20 +123,25 @@ void Scheduler::Run() {
     if (&Scheduler::GetInstance() != this) {
         throw RuntimeError("Run function must be called from the thread that owns the scheduler.");
     }
-    m_running = true;
     auto checkContinue = [this]() {
         if (!m_running) return false;
+        if (!stopWhenIdle) return true;
         std::lock_guard<std::mutex> lock(m_mutex);
         return !m_taskstates.empty() || !m_newtaskstates.empty();
     };
     auto checkContinueWithNoLock = [this]() {
         if (!m_running) return false;
+        if (!stopWhenIdle) return true;
         return !m_taskstates.empty() || !m_newtaskstates.empty();
     };
     auto waitEventWithConditionVariable = [&, this](Component::Duration waitDuration) {
         bool needLoop = false;
         while (true) {
             std::unique_lock<std::mutex> lock(m_mutex);
+            if (checkContinueWithNoLock()) {
+                needLoop = true;
+                break; // Exit the loop immediately if we have new tasks or events to handle
+            }
             m_cv.wait_for(lock, waitDuration);
             needLoop = !m_newtaskstates.empty();
             needLoop |= !checkContinueWithNoLock(); // Lock is acquired, so we can safely check the condition
@@ -174,6 +182,9 @@ void Scheduler::Run() {
         }
         return needLoop;
     };
+    m_running = true;
+    LCORE_LOG(std::format("Scheduler started. Address: {:p}", static_cast<void*>(this)));
+    m_cv.notify_all(); // Notify any waiting threads that the scheduler has started
     while (true) {
         if (!checkContinue()) break;
         Loop();
@@ -192,12 +203,21 @@ void Scheduler::Run() {
             waitEvent();
         }
     }
+    LCORE_LOG(std::format("Scheduler stopped. Address: {:p}", static_cast<void*>(this)));
     m_running = false;
 }
 
 void Scheduler::Stop() {
-    m_running = false;
+    bool expected = true;
+    if (!m_running.compare_exchange_strong(expected, false)) {
+        return; // Scheduler is already stopped
+    }
     m_cv.notify_all();
+}
+
+void Scheduler::WaitRunning() {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_cv.wait(lock, [this]() { return m_running.load(); });
 }
 
 // Time Component

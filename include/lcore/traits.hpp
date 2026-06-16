@@ -1,8 +1,8 @@
 #pragma once
+#include "config.h"
 #include <type_traits>
 #include <tuple>
 #include <cstddef>
-#include "config.h"
 
 LCORE_NAMESPACE_BEGIN
 
