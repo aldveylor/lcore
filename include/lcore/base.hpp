@@ -18,7 +18,7 @@
 // #define LCORE_NAMESPACE_END }
 #include "config.h"
 
-#ifdef LCORE_BUDEG
+#ifdef LCORE_DEBUG
 #include "assert.hpp"
 #define CONSTEXPR_NODEBUG
 #else
