@@ -7,7 +7,6 @@ using namespace LCORE_NAMESPACE::async;
 /// IOUringComponent implementation
 
 void IOUringComponent::WorkerThread() {
-    m_running = true;
     io_uring_queue_init(this->m_queue_depth, &this->m_ring, 0);
     this->m_eventfd = eventfd(0, EFD_NONBLOCK);
     io_uring_register_eventfd(&this->m_ring, this->m_eventfd);
@@ -18,6 +17,11 @@ void IOUringComponent::WorkerThread() {
     event.data.fd = this->m_eventfd;
     epoll_ctl(epfd, EPOLL_CTL_ADD, this->m_eventfd, &event);
 
+    {
+        std::lock_guard<std::mutex> lock(m_running_mutex);
+        m_running = true;
+        m_running_cv.notify_all();
+    }
     while (m_running) {
         // Check for completion events
         struct io_uring_cqe* cqe;
@@ -34,8 +38,7 @@ void IOUringComponent::WorkerThread() {
                 this->m_pending_operations.erase(it); // Remove from pending operations
             } else {
                 // Unknown user data
-                std::cerr << "Unknown user data in completion event: " << userdata << std::endl;
-                std::terminate();
+                LCORE_FATAL("Unknown user data in completion event: " << userdata);
             }
             io_uring_cqe_seen(&this->m_ring, cqe);
         }
@@ -53,6 +56,8 @@ void IOUringComponent::WorkerThread() {
     // Cleanup
     io_uring_queue_exit(&this->m_ring);
     close(this->m_eventfd);
+
+    std::lock_guard<std::mutex> lock(m_running_mutex);
     m_running = false;
 }
 
@@ -62,13 +67,21 @@ void IOUringComponent::DoInitialize(Scheduler& scheduler) {
     }
     this->m_scheduler = &scheduler;
     this->m_worker = std::thread(&IOUringComponent::WorkerThread, this);
+    // Wait until the worker thread is running
+    {
+        std::unique_lock<std::mutex> lock(m_running_mutex);
+        m_running_cv.wait(lock, [this] { return m_running; });
+    }
 }
 
 void IOUringComponent::DoFinalize(Scheduler&) {
     if (!this->m_worker.joinable()) {
         throw RuntimeError("IOUringComponent is not initialized");
     }
-    m_running = false;
+    {
+        std::lock_guard<std::mutex> lock(m_running_mutex);
+        m_running = false; // Signal the worker thread to stop
+    }
     // Wake up the worker thread to exit
     uint64_t one = 1;
     write(this->m_eventfd, &one, sizeof(one));
@@ -84,7 +97,7 @@ IOUringComponent::IOUringComponent(std::size_t queue_depth) {
 }
 IOUringComponent::~IOUringComponent() {
     if (this->m_worker.joinable()) {
-        std::cerr << "Warning: IOUringComponent is being destroyed while still running. Finalizing..." << std::endl;
+        LCORE_ERROR("IOUringComponent is being destroyed while still running. Finalizing...");
         this->DoFinalize(*this->m_scheduler); // Attempt to finalize if still running
     }
 }
@@ -168,7 +181,7 @@ void IOUringComponent::SubmitStatx(CoroutineData data, int dirfd, const char* pa
     this->CommitSQE(data, sqe);
 }
 /// AsyncFile implementation
-AsyncFile::AsyncFile(const std::filesystem::path& path, Mode openmode, Flags flags) {
+AsyncFile::AsyncFile(const std::filesystem::path& path, Mode openmode, Flags flags): m_ownership(true) {
     Permissions mode = 0;
     if ((bool)(flags & Flags::Create)) {
         if ((bool)(flags & Flags::Directory)) {
@@ -183,7 +196,7 @@ AsyncFile::AsyncFile(const std::filesystem::path& path, Mode openmode, Flags fla
         throw SystemError();
     }
 }
-AsyncFile::AsyncFile(const std::filesystem::path& path, Mode mode, Flags flags, Permissions permissions){
+AsyncFile::AsyncFile(const std::filesystem::path& path, Mode mode, Flags flags, Permissions permissions): m_ownership(true){
     auto rawflag = static_cast<int>(flags) | (static_cast<int>(mode) & O_ACCMODE);
     this->m_fd = open(path.c_str(), rawflag, permissions);
     if (this->m_fd < 0) {
@@ -193,22 +206,25 @@ AsyncFile::AsyncFile(const std::filesystem::path& path, Mode mode, Flags flags, 
 AsyncFile::~AsyncFile() {
     if (m_ownership && this->m_fd >= 0) {
         if (close(this->m_fd) < 0) {
-            std::cerr << "Warning: Failed to close file descriptor " << this->m_fd << ": " << strerror(errno) << std::endl;
+            LCORE_ERROR("Failed to close file descriptor " << this->m_fd << ": " << strerror(errno));
         }
     }
 }
 
-AsyncFile::AsyncFile(AsyncFile&& other) noexcept: m_fd(other.m_fd), m_current_offset(other.m_current_offset) {
+AsyncFile::AsyncFile(AsyncFile&& other) noexcept: m_fd(other.m_fd), m_current_offset(other.m_current_offset), m_ownership(other.m_ownership) {
     other.m_fd = -1; // Invalidate the moved-from object
+    other.m_ownership = false; // Prevent the moved-from object from closing the file descriptor
 }
 AsyncFile& AsyncFile::operator=(AsyncFile&& other) noexcept {
     if (this != &other) {
-        if (this->m_fd >= 0) {
+        if (this->m_ownership && this->m_fd >= 0) {
             close(this->m_fd); // Close the existing file descriptor
         }
         this->m_fd = other.m_fd;
         this->m_current_offset = other.m_current_offset;
+        this->m_ownership = other.m_ownership;
         other.m_fd = -1; // Invalidate the moved-from object
+        other.m_ownership = false; // Prevent the moved-from object from closing the file descriptor
     }
     return *this;
 }
@@ -313,30 +329,7 @@ Lazy<std::size_t> AsyncFile::Write(Span<const char> buffer) {
 Lazy<void> AsyncFile::Seek(Offset offset, SeekWhence whence) {
     AsyncLockGuard guard(this->m_mutex);
     co_await guard;
-    if (offset == 0) {
-        if (whence == SeekWhence::Current) {
-            co_return; // No need to seek if offset is 0 and whence is current
-        } else if (whence == SeekWhence::Set) {
-            this->m_current_offset = 0; // Reset to the beginning of the file
-            co_return;
-        }
-    }
-    struct statx buf;
-    struct StatxAwaiter : public CQEAwaiter {
-        int m_fd;
-        struct statx* buf;
-        
-        StatxAwaiter(int fd, struct statx* buf): m_fd(fd), buf(buf) {}
-        void await_suspend(std::coroutine_handle<> handle) {
-            auto data = this->GetCoroutineData(handle);
-            io_uring.SubmitStatx(data, m_fd, "", AT_EMPTY_PATH, STATX_SIZE, buf); // Dummy statx to get file size
-        }
-    };
-    int res = co_await StatxAwaiter(this->m_fd, &buf);
-    if (res < 0) {
-        throw SystemError(-res);
-    }
-    off_t fileSize = buf.stx_size;
+
     off_t newOffset;
     switch (whence) {
         case SeekWhence::Set:
@@ -345,8 +338,25 @@ Lazy<void> AsyncFile::Seek(Offset offset, SeekWhence whence) {
         case SeekWhence::Current:
             newOffset = this->m_current_offset + offset;
             break;
-        case SeekWhence::End:
+        case SeekWhence::End:{
+            struct statx buf;
+            struct StatxAwaiter : public CQEAwaiter {
+                int m_fd;
+                struct statx* buf;
+                
+                StatxAwaiter(int fd, struct statx* buf): m_fd(fd), buf(buf) {}
+                void await_suspend(std::coroutine_handle<> handle) {
+                    auto data = this->GetCoroutineData(handle);
+                    io_uring.SubmitStatx(data, m_fd, "", AT_EMPTY_PATH, STATX_SIZE, buf); // Dummy statx to get file size
+                }
+            };
+            int res = co_await StatxAwaiter(this->m_fd, &buf);
+            if (res < 0) {
+                throw SystemError(-res);
+            }
+            off_t fileSize = buf.stx_size;
             newOffset = fileSize + offset;
+        }
             break;
         default:
             throw InvalidArgument("Invalid seek whence");
@@ -354,9 +364,9 @@ Lazy<void> AsyncFile::Seek(Offset offset, SeekWhence whence) {
     if (newOffset < 0) {
         newOffset = 0; // Prevent seeking before the beginning of the file
     }
-    if (newOffset > fileSize) {
-        newOffset = fileSize; // Prevent seeking beyond the end of the file
-    }
+    // if (newOffset > fileSize) {
+    //     newOffset = fileSize; // Prevent seeking beyond the end of the file
+    // }
     this->m_current_offset = newOffset;
 }
 

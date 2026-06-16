@@ -2,7 +2,7 @@
 
 #include "lcore/sparsebuffer.hpp"
 
-using namespace lcore;
+using namespace LCORE_NAMESPACE;
 
 int main(int argc, char **argv)
 {

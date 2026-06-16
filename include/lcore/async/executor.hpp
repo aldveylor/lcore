@@ -28,7 +28,7 @@ class Scheduler {
 
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;
-    bool m_running = false;
+    std::atomic<bool> m_running = false;
     /// @brief Attach a component to the scheduler, the component will be initialized immediately
     /// @return true if the component is attached successfully, false if the component is already attached
     bool DoAttachComponent(TypeIndex, UniquePtr<Component>);
@@ -87,6 +87,8 @@ public:
     void Stop();
     /// @brief Notify the scheduler to wake up and handle events, called by components when an event is triggered
     void Notify() { m_cv.notify_one(); }
+    /// @brief Wait until the scheduler is running
+    void WaitRunning();
 
     /// @brief Schedule a task to be executed in the next iteration of the scheduler loop
     template <typename T>
