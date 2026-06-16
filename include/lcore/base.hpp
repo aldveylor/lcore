@@ -20,6 +20,9 @@
 
 #ifdef LCORE_BUDEG
 #include "assert.hpp"
+#define CONSTEXPR_NODEBUG
+#else
+#define CONSTEXPR_NODEBUG constexpr
 #endif
 
 #include "traits.hpp"
