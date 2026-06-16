@@ -22,6 +22,9 @@ Scheduler::~Scheduler() {
 
 bool Scheduler::DoAttachComponent(TypeIndex typeIndex, UniquePtr<Component> component)
 {
+    if (m_running) {
+        throw RuntimeError("Cannot attach component while scheduler is running.");
+    }
     std::unique_lock<std::mutex> lock(m_mutex);
     auto [it, inserted] = m_components.emplace(typeIndex, std::move(component));
     if (inserted) {
@@ -51,6 +54,9 @@ RawPtr<Component> Scheduler::DoGetComponent(TypeIndex typeIndex) const
 
 UniquePtr<Component> Scheduler::DoDetachComponent(TypeIndex typeIndex)
 {
+    if (m_running) {
+        throw RuntimeError("Cannot detach component while scheduler is running.");
+    }
     std::unique_lock<std::mutex> lock(m_mutex);
     auto it = m_components.find(typeIndex);
     if (it == m_components.end()) {
@@ -129,36 +135,36 @@ void Scheduler::Run() {
         std::lock_guard<std::mutex> lock(m_mutex);
         return !m_taskstates.empty() || !m_newtaskstates.empty();
     };
-    auto checkContinueWithNoLock = [this]() {
-        if (!m_running) return false;
-        if (!stopWhenIdle) return true;
-        return !m_taskstates.empty() || !m_newtaskstates.empty();
+    auto checkEventWithNoLock = [this]() {
+        return !m_running ||  // Stop event
+               !m_newtaskstates.empty(); // New task event
     };
     auto waitEventWithConditionVariable = [&, this](Component::Duration waitDuration) {
         bool needLoop = false;
         while (true) {
             std::unique_lock<std::mutex> lock(m_mutex);
-            if (checkContinueWithNoLock()) {
+            if (checkEventWithNoLock()) {
                 needLoop = true;
                 break; // Exit the loop immediately if we have new tasks or events to handle
             }
             m_cv.wait_for(lock, waitDuration);
-            needLoop = !m_newtaskstates.empty();
-            needLoop |= !checkContinueWithNoLock(); // Lock is acquired, so we can safely check the condition
+            needLoop = !checkEventWithNoLock(); // Lock is acquired, so we can safely check the condition
             lock.unlock();
             try {
                 for (auto& [typeIndex, component] : m_components) {
-                    if (component->HandleEvent(*this)) {
-                        needLoop = true;
-                    }
+                    needLoop |= component->HandleEvent(*this);
                 }
             } catch (...) {
-                lock.lock();
                 std::rethrow_exception(std::current_exception());
             }
             if (needLoop) break; // Exit the loop if we have new tasks or events to handle
         }
         return needLoop;
+    };
+    auto checkContinueWithNoLock = [this]() {
+        if (!m_running) return false;
+        if (!stopWhenIdle) return true;
+        return !m_taskstates.empty() || !m_newtaskstates.empty();
     };
     auto waitEvent = [&, this]() {
         bool needLoop = false;
@@ -223,6 +229,8 @@ void Scheduler::WaitRunning() {
 // Time Component
 
 void TimerComponent::AddTimer(TimePoint time, std::coroutine_handle<> handle) {
+    LCORE_LOG(std::format("Adding timer: time={}, handle={:p}", time.time_since_epoch().count(), static_cast<void*>(handle.address())));
+    LCORE_LOG(std::format("Time from now: {}ms", std::chrono::duration_cast<std::chrono::milliseconds>(time - std::chrono::steady_clock::now()).count()));
     std::lock_guard<std::mutex> lock(m_mutex);
     m_timers.push(Timer{time, handle});
     // Scheduler::GetThis().Notify();
@@ -270,25 +278,6 @@ bool TimerComponent::HandleEvent(Scheduler&) {
     return handled;
 }
 
-Lazy<void> async::Sleep(TimerComponent::Duration duration) {
-    struct Awaiter {
-        Scheduler& scheduler;
-        TimerComponent::Duration duration;
-
-        bool await_ready() const noexcept {
-            return false;
-        }
-
-        void await_suspend(std::coroutine_handle<> h) {
-            auto time = std::chrono::steady_clock::now() + duration;
-            scheduler.GetComponent<TimerComponent>().AddTimer(time, h);
-        }
-
-        void await_resume() const noexcept {}
-    };
-    co_await Awaiter{Scheduler::GetInstance(), duration};
-}
-
 Lazy<void> async::SleepUntil(TimerComponent::TimePoint time) {
     struct Awaiter {
         Scheduler& scheduler;
@@ -305,6 +294,10 @@ Lazy<void> async::SleepUntil(TimerComponent::TimePoint time) {
         void await_resume() const noexcept {}
     };
     co_await Awaiter{Scheduler::GetInstance(), time};
+}
+
+Lazy<void> async::Sleep(TimerComponent::Duration duration) {
+    return SleepUntil(std::chrono::steady_clock::now() + duration);
 }
 
 std::function<void()> async::SetTimeout(TimerComponent::Duration duration, LazyTask<void>&& task) {
