@@ -387,6 +387,10 @@ public:
         }
         throw std::out_of_range("Key not found or weak pointer expired");
     }
+    bool contains(const key_type& key) const {
+        auto it = Base::find(key);
+        return it != Base::end() && !it->second.Expired();
+    }
 
     // operators
     using Base::operator=;
