@@ -1,5 +1,5 @@
 #pragma once
-#include "base.hpp"
+#include "config.h"
 #include <memory>
 #include <string>
 #include <cxxabi.h>
@@ -35,7 +35,5 @@ inline const std::type_info& GetNthType(size_t n){
     std::array<const std::type_info*, sizeof...(Args)> types = {&typeid(Args)...};
     return *types[n];
 };
-
-
 
 LCORE_NAMESPACE_END

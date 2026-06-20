@@ -4,6 +4,7 @@
 
 #ifdef LCORE_DEBUG
 #include "assert.hpp"
+#include "type.hpp"
 #define _LCORE_CHECK_PTR_NOTZERO(ptr) LCORE_ASSERT(ptr, "Try to dereference a null pointer")
 #else
 #define _LCORE_CHECK_PTR_NOTZERO(ptr) do {} while (0)
@@ -126,7 +127,15 @@ public:
     template <typename U>
     requires Castable<T, U>
     inline constexpr RawPtr<U> Cast() const noexcept {
+#ifdef LCORE_DEBUG
+        // In debug mode, use DynamicCast to check the validity of the cast
+        if (ptr == nullptr) return nullptr;
+        U* castedPtr = dynamic_cast<U*>(ptr);
+        LCORE_ASSERT(castedPtr, std::format("Cast(): Invalid cast from {} to {}", demangle<T>(), demangle<U>()));
+        return RawPtr<U>(castedPtr);
+#else
         return static_cast<U*>(ptr);
+#endif
     }
 
     template <typename U>

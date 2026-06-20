@@ -1,6 +1,7 @@
 #pragma once
 #include "exception.hpp"
 #include "memory.hpp"
+#include <exception>
 #include <mutex>
 #include <condition_variable>
 #include <vector>
@@ -19,9 +20,12 @@ struct PromiseState {
         const T&
     >;
     using CallbackType = std::function<void(Args)>;
+    using ErrorCallbackType = std::function<void(std::exception_ptr)>;
 
     std::optional<T> value;
+    std::exception_ptr exception;
     std::vector<CallbackType> callbacks;
+    std::vector<ErrorCallbackType> error_callbacks;
     std::mutex mutex;
     std::condition_variable cond;
     
@@ -35,6 +39,20 @@ struct PromiseState {
         }
         for (const auto& callback : _callbacks) {
             callback(value);
+        }
+        cond.notify_all();
+    }
+
+    void Throw(std::exception_ptr exception) {
+        std::vector<ErrorCallbackType> _error_callbacks;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (this->value.has_value()) throw RuntimeError("Promise already fulfilled");
+            this->exception = exception;
+            _error_callbacks.swap(error_callbacks);
+        }
+        for (const auto& error_callback : _error_callbacks) {
+            error_callback(exception);
         }
         cond.notify_all();
     }
@@ -71,9 +89,12 @@ template <>
 struct PromiseState<void> {
     using Args = void;
     using CallbackType = std::function<void()>;
-    
+    using ErrorCallbackType = std::function<void(std::exception_ptr)>;
+
     bool done;
+    std::exception_ptr exception;
     std::vector<CallbackType> callbacks;
+    std::vector<ErrorCallbackType> error_callbacks;
     std::mutex mutex;
     std::condition_variable cond;
 
@@ -88,6 +109,20 @@ struct PromiseState<void> {
         }
         for (const auto& callback : _callbacks) {
             callback();
+        }
+        cond.notify_all();
+    }
+
+    void Throw(std::exception_ptr exception) {
+        std::vector<ErrorCallbackType> _error_callbacks;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (done) throw RuntimeError("Promise already fulfilled");
+            this->exception = exception;
+            _error_callbacks.swap(error_callbacks);
+        }
+        for (const auto& error_callback : _error_callbacks) {
+            error_callback(exception);
         }
         cond.notify_all();
     }
@@ -132,6 +167,10 @@ public:
         state->Complete(value);
     }
 
+    void Throw(std::exception_ptr exception) {
+        state->Throw(exception);
+    }
+
     void Complete() requires Void<T> {
         state->Complete();
     }
@@ -148,6 +187,7 @@ public:
     using StateType = _detail::PromiseState<T>;
     using Args = typename StateType::Args;
     using CallbackType = typename StateType::CallbackType;
+    using ErrorCallbackType = typename StateType::ErrorCallbackType;
 private:
     SharedPtr<StateType> state;
 protected:
@@ -164,6 +204,9 @@ public:
     }
     void Then(CallbackType callback) const {
         state->Then(std::move(callback));
+    }
+    void Error(ErrorCallbackType error_callback) const {
+        state->Then(std::move(error_callback));
     }
 };
 
