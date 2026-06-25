@@ -17,6 +17,8 @@
             LCORE_ABORT();                                                                      \
         }                                                                                       \
     } while (0)
+#else
+#define LCORE_ASSERT(condition, msg) do {} while (0)
 #endif // LCORE_ENABLE_ASSERT
 
 #define LCORE_LOG(content) do { \
