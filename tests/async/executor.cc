@@ -126,7 +126,6 @@ TEST(TimeComponent, SetInterval)
     scheduler.Schedule([&]()->Lazy<void> {
         auto cancel = SetInterval(50ms, [&] {
             count++;
-            std::cout << "Interval called: " << count << std::endl;
         });
         co_await Sleep(220ms);
         cancel();

@@ -56,6 +56,12 @@ struct StateBase {
     bool done() const {
         return !handle || handle.done();
     }
+    void destroy() {
+        if (handle) {
+            handle.destroy();
+            handle = nullptr;
+        }
+    }
     void resume() {
         if (handle) handle.resume();
     }
@@ -156,6 +162,7 @@ public:
     
     bool done() const { return state->done(); }
     void resume() { if(state) state->resume(); }
+    void destroy() { if(state) state->destroy(); }
     bool has_exception() const { return state->has_exception(); }
     std::exception_ptr get_exception() const { return state->get_exception(); }
     bool has_value() const requires (!Void<T>) {

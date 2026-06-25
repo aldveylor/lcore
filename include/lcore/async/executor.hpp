@@ -153,7 +153,11 @@ private:
     };
     IterablePriorityQueue<Timer, std::vector<Timer>, std::greater<>> m_timers;
     mutable std::mutex m_mutex;
+
+    Scheduler* m_scheduler = nullptr;
 public:
+    void DoInitialize(Scheduler&) override;
+    void DoFinalize(Scheduler&) override;
     void AddTimer(TimePoint time, std::coroutine_handle<> handle);
     /// @brief Remove a timer, return true if the timer is removed, false if the timer is not found or already expired
     bool RemoveTimer(TimePoint time, std::coroutine_handle<> handle);

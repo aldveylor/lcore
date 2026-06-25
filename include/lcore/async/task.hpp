@@ -42,6 +42,11 @@ public:
         return handle;
     }
 
+    void destroy() {
+        if(handle) handle.destroy();
+        handle = nullptr;
+    }
+
     ~TaskBase() {
 #ifdef LCORE_DEBUG
         if (handle && !handle.done()) {

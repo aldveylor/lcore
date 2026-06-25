@@ -5,6 +5,7 @@
 #include <exception>
 #include <mutex>
 #include <utility>
+#include "lcore/type.hpp"
 
 using namespace LCORE_NAMESPACE;
 using namespace LCORE_NAMESPACE::async;
@@ -41,7 +42,7 @@ bool Scheduler::DoAttachComponent(TypeIndex typeIndex, UniquePtr<Component> comp
             std::rethrow_exception(std::current_exception());
         }
         lock.lock();
-        LOG_DEBUG(std::format("Component of type {} attached to scheduler.", typeIndex.name()));
+        LOG_DEBUG(std::format("Component of type {} attached to scheduler.", demangle(typeIndex.name())));
     }
     return inserted;
 }
@@ -247,10 +248,27 @@ void Scheduler::WaitRunning() {
 
 // Time Component
 
+void TimerComponent::DoInitialize(Scheduler& sch) {
+    this->m_scheduler = &sch;
+}
+
+void TimerComponent::DoFinalize(Scheduler&) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    while (!m_timers.empty()) {
+        auto timer = m_timers.top();
+        m_timers.pop();
+        timer.handle.destroy(); // Destroy the coroutine handle to avoid leaks
+    }
+    this->m_scheduler = nullptr;
+}
+
 void TimerComponent::AddTimer(TimePoint time, std::coroutine_handle<> handle) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    bool needNotify = m_timers.empty() || time < m_timers.data().front().time;
     m_timers.push(Timer{time, handle});
-    // Scheduler::GetThis().Notify();
+    if (needNotify) {
+        m_scheduler->Notify();
+    }
 }
 
 bool TimerComponent::RemoveTimer(TimePoint time, std::coroutine_handle<> handle) {
@@ -324,7 +342,10 @@ std::function<void()> async::SetTimeout(TimerComponent::Duration duration, LazyT
     auto cancelled = MakeShared<bool>(false);
     auto wrapTask = [](LazyTask<void> task, SharedPtr<bool> cancelled) -> Lazy<void> {
         co_await std::suspend_always{};
-        if (*cancelled) co_return;
+        if (*cancelled) {
+            task.destroy(); // Destroy the task to avoid leaks
+            co_return;
+        }
         co_await std::move(task);
     }(std::move(task), cancelled);
     auto handle = wrapTask.get_handle();
