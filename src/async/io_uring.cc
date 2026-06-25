@@ -280,7 +280,6 @@ Lazy<std::size_t> AsyncFile::WriteAt(Offset offset, Span<const char> buffer) {
             io_uring.SubmitWrite(data, m_fd, buffer.data(), buffer.size(), offset);
         }
     };
-    std::cout << "Submitting write operation: fd=" << this->m_fd << ", offset=" << offset << ", size=" << buffer.size() << std::endl;
     int res = co_await WriteAwaiter(this->m_fd, buffer, offset);
     if (res < 0) {
         throw SystemError(-res);
