@@ -129,10 +129,14 @@ public:
     inline constexpr RawPtr<U> Cast() const noexcept {
 #ifdef LCORE_DEBUG
         // In debug mode, use DynamicCast to check the validity of the cast
-        if (ptr == nullptr) return nullptr;
-        U* castedPtr = dynamic_cast<U*>(ptr);
-        LCORE_ASSERT(castedPtr, std::format("Cast(): Invalid cast from {} to {}", demangle<T>(), demangle<U>()));
-        return RawPtr<U>(castedPtr);
+        if constexpr (IsPolymorphic<T>) {
+            if (ptr == nullptr) return nullptr;
+            U* castedPtr = dynamic_cast<U*>(ptr);
+            LCORE_ASSERT(castedPtr, std::format("Cast(): Invalid cast from {} to {}", demangle<T>(), demangle<U>()));
+            return RawPtr<U>(castedPtr);
+        } else { // If T is not polymorphic, use static_cast
+            return static_cast<U*>(ptr);
+        }
 #else
         return static_cast<U*>(ptr);
 #endif

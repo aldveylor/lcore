@@ -43,10 +43,12 @@ protected:
     /// Use Scheduler::GetThis() to get the current scheduler instance instead
     Scheduler() = default;
     ~Scheduler();
+
+    static void DefaultExceptionHandler(std::exception_ptr e);
 public:
     bool stopWhenIdle = true;                   /// If true, the scheduler will stop automaticly when there is no task to execute
     bool waitForConditionVariable = true;       /// If true, the scheduler will wait for the condition variable to be notified when there is no task to execute, otherwise it will busy wait
-    std::function<void(std::exception_ptr)> exceptionHandler;  /// The exception handler, called when a task throws an exception, if not set, the exception will be ignored
+    std::function<void(std::exception_ptr)> exceptionHandler = DefaultExceptionHandler;  /// The exception handler, called when a task throws an exception, if not set, the exception will be ignored
 
     /// @brief Get the current scheduler instance, only awailable in current thread
     static Scheduler& GetInstance();

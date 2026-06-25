@@ -17,19 +17,12 @@
             LCORE_ABORT();                                                                      \
         }                                                                                       \
     } while (0)
-#else
-#define LCORE_ASSERT(condition, msg) do {} while (0)
+
 #endif // LCORE_ENABLE_ASSERT
 
-#define LCORE_LOG(content) do { \
+#define _LCORE_LOG(content) do { \
     std::cerr << "Log: " << __FILE__ << ":" << __LINE__ << ": " << __FUNCTION__ << ": " << content << std::endl; \
 } while (0)
-
-
-#else // not LCORE_DEBUG
-
-#define LCORE_ABORT() do {std::abort();} while (0)
-#define LCORE_LOG(content) do {} while (0)
 
 #endif // LCORE_DEBUG
 
@@ -37,17 +30,12 @@
 #ifndef LCORE_ASSERT
 #define LCORE_ASSERT(condition, msg) do {} while (0)
 #endif
-
-#define LCORE_ERROR(msg) LCORE_LOG("Error: " << msg)
-
-#ifdef LCORE_ENABLE_ASSERT
-#define LCORE_ASSERT_ERROR(condition, msg) do { \
-    if (!bool(condition)) { \
-        LCORE_ERROR(msg); \
-    } \
-} while (0)
-#else
-#define LCORE_ASSERT_ERROR(condition, msg) do {} while (0)
+#ifndef LCORE_ABORT
+#define LCORE_ABORT() do {} while (0)
+#endif
+#ifndef _LCORE_LOG
+#define _LCORE_LOG(content) do {} while (0)
 #endif
 
-#define LCORE_FATAL(msg) do {LCORE_LOG("Fatal: " << msg); exit(-1);} while (0)
+#define LCORE_WARN(msg) do {_LCORE_LOG("Warning: " << msg);} while (0)
+#define LCORE_FATAL(msg) do {_LCORE_LOG("Fatal: " << msg); LCORE_ABORT();} while (0)

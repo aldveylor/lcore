@@ -10,22 +10,22 @@ template <typename T>
 using Forward = T;
 
 template <typename T>
-concept Number = std::is_arithmetic_v<T>;
+concept IsNumber = std::is_arithmetic_v<T>;
 
 template <typename T>
-concept Integer = std::is_integral_v<T>;
+concept IsInteger = std::is_integral_v<T>;
 
 template <typename T>
-concept Floating = std::is_floating_point_v<T>;
+concept IsFloating = std::is_floating_point_v<T>;
 
 template <typename T>
-concept Unsigned = std::is_unsigned_v<T>;
+concept IsUnsigned = std::is_unsigned_v<T>;
 
 template <typename T>
-concept Signed = std::is_signed_v<T>;
+concept IsSigned = std::is_signed_v<T>;
 
 template <typename T>
-concept Real = Floating<T> || Integer<T>;
+concept IsReal = IsFloating<T> || IsInteger<T>;
 
 template <typename T>
 concept Void = std::is_void_v<T>;
@@ -37,7 +37,7 @@ template <typename T, typename ...Items>
 concept OneOf = (Same<T, Items> || ...);
 
 template <typename T>
-concept Pointer = std::is_pointer_v<T>;
+concept IsPointer = std::is_pointer_v<T>;
 
 template <auto T, auto U>
 concept Equal = Same<decltype(T), decltype(U)> && T == U;
@@ -85,6 +85,9 @@ concept IsClass = std::is_class_v<T>;
 
 template <typename T>
 concept IsUnion = std::is_union_v<T>;
+
+template <typename T>
+concept IsPolymorphic = std::is_polymorphic_v<T>;
 
 /**
  * Iterator Traits, see also in std::ranges::iterator_traits

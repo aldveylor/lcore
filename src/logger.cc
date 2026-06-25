@@ -1,4 +1,5 @@
 #include "lcore/logger.hpp"
+#include "assert.h"
 #include <ctime>
 #include <chrono>
 #include <map>
@@ -7,7 +8,11 @@
 using namespace LCORE_NAMESPACE;
 using namespace LCORE_NAMESPACE::log;
 
-static Level defaultLevel = Level::None;
+#ifdef LCORE_DEBUG
+static Level defaultLevel = Level::Debug;
+#else
+static Level defaultLevel = Level::Info;
+#endif
 static std::map<std::string_view, SimpleLogger*>* loggerMap;
 
 USE_LOGGER("Compiler.Utils.Log");
@@ -110,7 +115,7 @@ SimpleLogger::SimpleLogger(std::string_view declare, std::string_view file): dec
     {
         _loggerMap.insert({declare, this});
     }else{
-        ASSERT_FATAL(fmt::format("Logger for file {} already exists", file));
+        LOG_FATAL(fmt::format("Logger for file {} already exists", file));
     }
 }
 
@@ -119,7 +124,7 @@ void SimpleLogger::SetLevel(std::string_view declare, Level level){
     {
         (*loggerMap)[declare]->level = level;
     }else{
-        ASSERT_FATAL(fmt::format("Logger for file {} not exists", declare));
+        LOG_FATAL(fmt::format("Logger for file {} not exists", declare));
     }
 }
 

@@ -1,4 +1,5 @@
 #pragma once
+#include "lcore/assert.hpp"
 #include "lcore/async/traits.hpp"
 #include "sharedpromise.hpp"
 #include "lcore/exception.hpp"
@@ -33,7 +34,7 @@ struct StateBase {
     ~StateBase() {
 #ifdef LCORE_DEBUG
         if (handle && !handle.done()) {
-            LCORE_ERROR("Destroying a Task whose coroutine is not finished. This may cause resource leaks or undefined behavior.");
+            LCORE_WARN("Destroying a Task whose coroutine is not finished. This may cause resource leaks or undefined behavior.");
         }
 #endif
         if (handle) handle.destroy();

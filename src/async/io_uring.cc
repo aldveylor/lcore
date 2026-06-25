@@ -38,7 +38,7 @@ void IOUringComponent::WorkerThread() {
                 this->m_pending_operations.erase(it); // Remove from pending operations
             } else {
                 // Unknown user data
-                LCORE_FATAL("Unknown user data in completion event: " << userdata);
+                LCORE_WARN("Unknown user data in completion event: " << userdata);
             }
             io_uring_cqe_seen(&this->m_ring, cqe);
         }
@@ -97,7 +97,7 @@ IOUringComponent::IOUringComponent(std::size_t queue_depth) {
 }
 IOUringComponent::~IOUringComponent() {
     if (this->m_worker.joinable()) {
-        LCORE_ERROR("IOUringComponent is being destroyed while still running. Finalizing...");
+        LCORE_WARN("IOUringComponent is being destroyed while still running. Finalizing...");
         this->DoFinalize(*this->m_scheduler); // Attempt to finalize if still running
     }
 }
@@ -206,7 +206,7 @@ AsyncFile::AsyncFile(const std::filesystem::path& path, Mode mode, Flags flags, 
 AsyncFile::~AsyncFile() {
     if (m_ownership && this->m_fd >= 0) {
         if (close(this->m_fd) < 0) {
-            LCORE_ERROR("Failed to close file descriptor " << this->m_fd << ": " << strerror(errno));
+            LCORE_WARN("Failed to close file descriptor " << this->m_fd << ": " << strerror(errno));
         }
     }
 }

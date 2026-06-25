@@ -71,7 +71,7 @@ public:
 #ifdef LCORE_DEBUG
         if (!m_locked) {
             // User forgot to co_await the guard, which means the mutex was never locked
-            LCORE_ERROR("AsyncLockGuard was not awaited, mutex was never locked");
+            LCORE_WARN("AsyncLockGuard was not awaited, mutex was never locked");
         }
 #endif
         m_mutex.unlock(); 
@@ -97,7 +97,7 @@ public:
 #ifdef LCORE_DEBUG
         if (!m_has_awaited) {
             // User forgot to co_await the lock, which means the mutex was never locked
-            LCORE_ERROR("AsyncUniqueLock was not awaited, mutex was never locked");
+            LCORE_WARN("AsyncUniqueLock was not awaited, mutex was never locked");
         }
 #endif
         if (m_owns_lock) {

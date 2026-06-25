@@ -367,7 +367,7 @@ inline BasicOStream<CharT, Traits>& operator<<(BasicOStream<CharT, Traits>& stre
     return stream;
 }
 
-template <Number Num, typename Traits = std::char_traits<char>>
+template <IsNumber Num, typename Traits = std::char_traits<char>>
 requires (!Same<Num, char>)
 inline BasicOStream<char, Traits>& operator<<(BasicOStream<char, Traits>& stream, Num rhs) {
     return stream << std::to_string(rhs); // Convert to string and write to stream

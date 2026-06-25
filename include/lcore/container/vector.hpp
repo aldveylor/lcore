@@ -60,7 +60,7 @@ public:
     requires Same<T, ResultCallable<Func, const IterableValueType<tContainer>&>>
     inline static Vector<T> fromContainer(const tContainer& iterable, Func f) {
         Vector<T> res;
-        if constexpr (Integer<decltype(std::declval<tContainer>().size())>) {
+        if constexpr (IsInteger<decltype(std::declval<tContainer>().size())>) {
             res.reserve(iterable.size());
         }
         for (auto& item: iterable) {

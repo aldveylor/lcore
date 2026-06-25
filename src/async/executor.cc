@@ -1,4 +1,5 @@
 #include "lcore/async/executor.hpp"
+#include "lcore/logger.hpp"
 #include <chrono>
 #include <coroutine>
 #include <exception>
@@ -8,10 +9,12 @@
 using namespace LCORE_NAMESPACE;
 using namespace LCORE_NAMESPACE::async;
 
+USE_LOGGER("async.executor");
+
 // Scheduler
 
 Scheduler::~Scheduler() {
-    LCORE_ASSERT_ERROR(!m_running, "Scheduler must be stopped before destruction.");
+    LCORE_ASSERT(!m_running, "Scheduler must be stopped before destruction.");
     std::unique_lock<std::mutex> lock(m_mutex);
     for (auto& [typeIndex, component] : m_components) {
         lock.unlock();
@@ -38,6 +41,7 @@ bool Scheduler::DoAttachComponent(TypeIndex typeIndex, UniquePtr<Component> comp
             std::rethrow_exception(std::current_exception());
         }
         lock.lock();
+        LOG_DEBUG(std::format("Component of type {} attached to scheduler.", typeIndex.name()));
     }
     return inserted;
 }
@@ -110,6 +114,21 @@ void Scheduler::DoSchedule(Ptr<StateBase>&& state) {
         m_newtaskstates.push_back(std::move(state));
     }
     m_cv.notify_one();
+}
+
+void Scheduler::DefaultExceptionHandler(std::exception_ptr eptr) {
+    try {
+        if (eptr) {
+            std::rethrow_exception(eptr);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(std::format("Unhandled exception in scheduler: {}", e.what()));
+    } catch (...) {
+        LOG_ERROR("Unhandled unknown exception in scheduler");
+#ifdef LCORE_DEBUG
+        
+#endif
+    }
 }
 
 #include <pthread.h>
@@ -189,7 +208,7 @@ void Scheduler::Run() {
         return needLoop;
     };
     m_running = true;
-    LCORE_LOG(std::format("Scheduler started. Address: {:p}", static_cast<void*>(this)));
+    LOG_DEBUG(std::format("[I: {:p}] Scheduler started.", static_cast<void*>(this)));
     m_cv.notify_all(); // Notify any waiting threads that the scheduler has started
     while (true) {
         if (!checkContinue()) break;
@@ -209,7 +228,7 @@ void Scheduler::Run() {
             waitEvent();
         }
     }
-    LCORE_LOG(std::format("Scheduler stopped. Address: {:p}", static_cast<void*>(this)));
+    LOG_DEBUG(std::format("[I: {:p}] Scheduler stopped.", static_cast<void*>(this)));
     m_running = false;
 }
 
@@ -229,8 +248,6 @@ void Scheduler::WaitRunning() {
 // Time Component
 
 void TimerComponent::AddTimer(TimePoint time, std::coroutine_handle<> handle) {
-    LCORE_LOG(std::format("Adding timer: time={}, handle={:p}", time.time_since_epoch().count(), static_cast<void*>(handle.address())));
-    LCORE_LOG(std::format("Time from now: {}ms", std::chrono::duration_cast<std::chrono::milliseconds>(time - std::chrono::steady_clock::now()).count()));
     std::lock_guard<std::mutex> lock(m_mutex);
     m_timers.push(Timer{time, handle});
     // Scheduler::GetThis().Notify();
