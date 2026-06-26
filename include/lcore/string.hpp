@@ -129,3 +129,21 @@ inline String String::Join(Container&& container, StringView sep){
 };
 
 LCORE_NAMESPACE_END
+
+namespace std {
+
+template<>
+struct hash<LCORE_NAMESPACE::String> {
+    size_t operator()(const LCORE_NAMESPACE::String& str) const noexcept {
+        return std::hash<std::string>()(str);
+    }
+};
+
+template<>
+struct hash<LCORE_NAMESPACE::StringView> {
+    size_t operator()(const LCORE_NAMESPACE::StringView& view) const noexcept {
+        return std::hash<std::string_view>()(view);
+    }
+};
+
+}
