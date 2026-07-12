@@ -413,6 +413,34 @@ public:
     inline SharedPtr<U> ReinterpretCast() const noexcept {
         return SharedPtr<U>(m_tptr.template ReinterpretCast<U>(), m_cb);
     }
+
+    // Helper operators (forward operators to RawPtr)
+    // Member pointer
+    template <typename M>
+    inline decltype(auto) operator->*(M member) const noexcept requires (IsClass<T> && !Void<M>) {
+        return m_tptr->*member;
+    }
+    template <typename M>
+    inline decltype(auto) operator->*(M member) noexcept requires (IsClass<T> && !Void<M>) {
+        return m_tptr->*member;
+    }
+    template <typename M>
+    inline void operator->*(M member) const noexcept requires (IsClass<T> && Void<M>) {
+        return m_tptr->*member;
+    }
+    template <typename M>
+    inline void operator->*(M member) noexcept requires (IsClass<T> && Void<M>) {
+        return m_tptr->*member;
+    }
+    // Subscript operator
+    template <typename U>
+    inline decltype(auto) operator[](U index) const noexcept requires (!Void<T>) {
+        return (*m_tptr)[std::forward<U>(index)];
+    }
+    template <typename U>
+    inline decltype(auto) operator[](U index) noexcept requires (!Void<T>) {
+        return (*m_tptr)[std::forward<U>(index)];
+    }
 };
 
 /// @brief Weak pointer
@@ -581,24 +609,24 @@ class UniquePtr {
     template <typename U, typename D>
     friend class UniquePtr;
 protected:
-    RawPtr<T> ptr = nullptr;
+    RawPtr<T> m_tptr = nullptr;
     Deleter deleter;
 public:
     using Type = T;
     
     // factory methods
     inline UniquePtr() = default;
-    inline UniquePtr(std::nullptr_t): ptr(nullptr) {}
-    inline UniquePtr(RawPtr<T> p): ptr(p) {}
-    inline UniquePtr(RawPtr<T> p, Deleter d): ptr(p), deleter(std::move(d)) {}
+    inline UniquePtr(std::nullptr_t): m_tptr(nullptr) {}
+    inline UniquePtr(RawPtr<T> p): m_tptr(p) {}
+    inline UniquePtr(RawPtr<T> p, Deleter d): m_tptr(p), deleter(std::move(d)) {}
     inline UniquePtr(const UniquePtr<T, Deleter>& other) = delete; // No copy allowed
-    inline UniquePtr(UniquePtr<T, Deleter>&& other) noexcept: ptr(other.ptr), deleter(std::move(other.deleter)) {
-        other.ptr = nullptr;
+    inline UniquePtr(UniquePtr<T, Deleter>&& other) noexcept: m_tptr(other.m_tptr), deleter(std::move(other.deleter)) {
+        other.m_tptr = nullptr;
     }
     template <typename U, typename D>
     requires (DerivedFrom<U, T> || Void<T>)
-    inline UniquePtr(UniquePtr<U, D>&& other) noexcept: ptr(other.ptr.template Cast<T>()), deleter(std::move(other.deleter)) {
-        other.ptr = nullptr;
+    inline UniquePtr(UniquePtr<U, D>&& other) noexcept: m_tptr(other.m_tptr.template Cast<T>()), deleter(std::move(other.deleter)) {
+        other.m_tptr = nullptr;
     }
 
     inline ~UniquePtr() { Reset(); }
@@ -608,9 +636,9 @@ public:
     inline UniquePtr<T, Deleter>& operator=(UniquePtr<T, Deleter>&& other) noexcept {
         if (this != &other) {
             Reset();
-            ptr = other.ptr;
+            m_tptr = other.m_tptr;
             deleter = std::move(other.deleter);
-            other.ptr = nullptr;
+            other.m_tptr = nullptr;
         }
         return *this;
     }
@@ -618,47 +646,47 @@ public:
     requires (DerivedFrom<U, T> || Void<T>)
     inline UniquePtr<T, Deleter>& operator=(UniquePtr<U, D>&& other) noexcept {
         Reset();
-        ptr = other.ptr.template Cast<T>();
+        m_tptr = other.m_tptr.template Cast<T>();
         deleter = std::move(other.deleter);
-        other.ptr = nullptr;
+        other.m_tptr = nullptr;
         return *this;
     }
 
     inline T* operator->() const noexcept {
-        _LCORE_CHECK_PTR_NOTZERO(ptr.Get());
-        return ptr.operator->();
+        _LCORE_CHECK_PTR_NOTZERO(m_tptr.Get());
+        return m_tptr.operator->();
     }
     inline auto operator*() const noexcept requires (!Void<T>) {
-        _LCORE_CHECK_PTR_NOTZERO(ptr.Get());
-        return *ptr;
+        _LCORE_CHECK_PTR_NOTZERO(m_tptr.Get());
+        return *m_tptr;
     }
 
-    inline operator bool() const noexcept { return ptr != nullptr; }
+    inline operator bool() const noexcept { return m_tptr != nullptr; }
     inline int operator<=>(const UniquePtr<T, Deleter>& other) const noexcept {
-        return ptr <=> other.ptr;
+        return m_tptr <=> other.m_tptr;
     }
 
     // Interface methods
     inline constexpr bool IsConst() const noexcept { return std::is_const_v<T>; }
     
-    inline RawPtr<T> Get() const noexcept { return ptr; }
+    inline RawPtr<T> Get() const noexcept { return m_tptr; }
     
     inline void Reset() noexcept {
-        if (ptr) {
-            deleter(ptr.Get());   // Call the deleter
-            ptr = nullptr;  // Set the pointer to nullptr
+        if (m_tptr) {
+            deleter(m_tptr.Get());   // Call the deleter
+            m_tptr = nullptr;  // Set the pointer to nullptr
         }
     }
 
     inline void Swap(UniquePtr<T, Deleter>& other) noexcept {
-        std::swap(ptr, other.ptr);
+        std::swap(m_tptr, other.m_tptr);
         std::swap(deleter, other.deleter);
     }
 
     /// @brief Release the ownership of the pointer and return it
     inline RawPtr<T> Release() noexcept {
-        auto temp = ptr;
-        ptr = nullptr;
+        auto temp = m_tptr;
+        m_tptr = nullptr;
         return temp;
     }
 
@@ -667,6 +695,34 @@ public:
     // because UniquePtr is not meant to be used polymorphically like RawPtr, SharedPtr.
     // If you need to cast, consider using SharedPtr or RawPtr instead.
     // If you really need to cast, you can use Get() to get the raw pointer and then cast it.
+
+    // Helper operators (forward operators to RawPtr)
+    // Member pointer
+    template <typename M>
+    inline decltype(auto) operator->*(M member) const noexcept requires (IsClass<T> && !Void<M>) {
+        return m_tptr->*member;
+    }
+    template <typename M>
+    inline decltype(auto) operator->*(M member) noexcept requires (IsClass<T> && !Void<M>) {
+        return m_tptr->*member;
+    }
+    template <typename M>
+    inline void operator->*(M member) const noexcept requires (IsClass<T> && Void<M>) {
+        return m_tptr->*member;
+    }
+    template <typename M>
+    inline void operator->*(M member) noexcept requires (IsClass<T> && Void<M>) {
+        return m_tptr->*member;
+    }
+    // Subscript operator
+    template <typename U>
+    inline decltype(auto) operator[](U index) const noexcept requires (!Void<T>) {
+        return (*m_tptr)[std::forward<U>(index)];
+    }
+    template <typename U>
+    inline decltype(auto) operator[](U index) noexcept requires (!Void<T>) {
+        return (*m_tptr)[std::forward<U>(index)];
+    }
 };
 
 template <typename T, typename... Args>
