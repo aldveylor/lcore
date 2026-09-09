@@ -38,7 +38,7 @@ template <template <typename> typename AtomicType = std::atomic>
 class ControlBlockBase {
 public:
     AtomicType<size_t> shared_count = 1; // Start with 1 for the initial shared_ptr
-    AtomicType<size_t> weak_count = 0;
+    AtomicType<size_t> weak_count = 1;   // If shared_count > 0, weak_count is at least 1 to keep the control block alive
 
     /// @brief Destroy the object (Do not deallocate the memory!!!)
     virtual void Destory() = 0;
@@ -46,29 +46,24 @@ public:
     virtual void Deallocate() = 0;
     virtual ~ControlBlockBase() = default;
 
-    void Ref() noexcept { ++shared_count; }
+    void Ref() noexcept {
+        shared_count.fetch_add(1, std::memory_order_relaxed);
+    }
     bool Unref() {
-        if (--shared_count == 0) {
-            /**
-             * Why weak_count is cached here?
-             * When Destory() is called, the target object may own weak references to this control block.
-             * WeakUnref() will be called and weak_count will be decremented.
-             * if weak_count reaches 0, this control block will be deallocated by WeakUnref().
-             * When Destory() is returned, this control block is deallocated and the weak_count is no longer valid.
-             * So we cache the weak_count before calling Destory() to ensure that we can safely check if the control block is deallocated.
-             */
-            size_t weak_count = this->weak_count;
+        if (shared_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             Destory();
-            if (weak_count == 0) {
+            if (weak_count.fetch_sub(1, std::memory_order_acq_rel) == 1) { // Weak reference count reaches zero
                 Deallocate();
                 return true; // Indicates that the control block is deallocated
             }
         }
         return false; // Indicates that the control block is still alive
     }
-    void WeakRef() noexcept { ++weak_count; }
+    void WeakRef() noexcept { 
+        weak_count.fetch_add(1, std::memory_order_relaxed);
+    }
     bool WeakUnref() {
-        if (--weak_count == 0 && shared_count == 0) {
+        if (weak_count.fetch_sub(1, std::memory_order_acq_rel) == 1) { // Weak reference count reaches zero
             Deallocate();
             return true; // Indicates that the control block is deallocated
         }
@@ -586,12 +581,10 @@ inline SharedPtr<T> MakeShared(Args&&... args) {
             delete this; // Deallocate the control block itself
         }
     };
-    auto mem = new char[sizeof(CbWithT)];
     try {
-        auto cb = new (mem) CbWithT{std::forward<Args>(args)...};
+        auto cb = new CbWithT{std::forward<Args>(args)...};
         return SharedPtr<T>(RawPtr<T>(reinterpret_cast<T*>(cb->mem)), cb);
     } catch (...) {
-        delete[] mem; // Clean up memory in case of exception
         throw;
     }
 };
