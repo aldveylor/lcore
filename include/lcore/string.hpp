@@ -71,8 +71,21 @@ public:
 /// @note String views and strings are copied; C strings are borrowed and must outlive the adapter.
 class CStringView {
 public:
+#ifdef LCORE_STRING_NULLTERMINATED
+    inline CStringView(StringView view) {
+        if (view.data()) {
+            if (view.data()[view.size()] == '\0') {
+                m_cstr = view.data();
+            } else {
+                m_cache = String(view);
+                m_cstr = m_cache.c_str();
+            }
+        }
+    }
+#else
     inline CStringView(StringView view): m_cache(view) {}
-    inline CStringView(const String& str): m_cache(str) {}
+#endif
+    inline CStringView(const String& str): m_cstr(str.c_str()) {}
     inline CStringView(const char* cstr): m_cstr(cstr ? cstr : "") {}
 
     inline operator const char*() const noexcept { return c_str(); }
