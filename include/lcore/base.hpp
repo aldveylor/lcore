@@ -73,3 +73,20 @@ struct Monostate {
 };
 
 LCORE_NAMESPACE_END
+
+namespace std {
+template <>
+struct hash<LCORE_NAMESPACE::TypeIndex> {
+    size_t operator()(const LCORE_NAMESPACE::TypeIndex& typeIndex) const noexcept {
+        return typeIndex.hash_code();
+    }
+};
+
+template <>
+struct hash<LCORE_NAMESPACE::Monostate> {
+    size_t operator()(const LCORE_NAMESPACE::Monostate&) const noexcept {
+        return 0;
+    }
+};
+}
+
