@@ -33,6 +33,14 @@ public:
 
 namespace detail {
 
+struct AdoptControlBlockTag {};
+struct ShareControlBlockTag {};
+struct RefAlreadyAcquiredTag {};
+
+inline constexpr AdoptControlBlockTag AdoptControlBlock{};
+inline constexpr ShareControlBlockTag ShareControlBlock{};
+inline constexpr RefAlreadyAcquiredTag RefAlreadyAcquired{};
+
 // Control block for SharedPtr & WeakPtr
 template <template <typename> typename AtomicType = std::atomic>
 class ControlBlockBase {
@@ -46,6 +54,18 @@ public:
     virtual void Deallocate() = 0;
     virtual ~ControlBlockBase() = default;
 
+    bool TryRef() noexcept {
+        auto count = shared_count.load(std::memory_order_acquire);
+        while (count != 0) {
+            if (shared_count.compare_exchange_weak(
+                    count,
+                    count + 1,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+            return true;
+        }
+        return false;
+    }
     void Ref() noexcept {
         shared_count.fetch_add(1, std::memory_order_relaxed);
     }
@@ -192,21 +212,34 @@ class SharedPtr {
     friend class WeakPtr;
     template <typename U, typename... Args>
     friend SharedPtr<U> MakeShared(Args&&... args);
-protected:
+private:
     RawPtr<T> m_tptr;
     RawPtr<detail::ControlBlockBase<>> m_cb = nullptr;
-    inline void CheckEnableSharedFromThis() {
-        if constexpr (detail::ExtractEnableSharedFromThis<T>::value) {
-            using Extract = ExtractEnableSharedFromThis<T>;
-            m_tptr.template ConstCast<RemoveCV<T>>().
-                template Cast<EnableSharedFromThis<Extract>>()->m_weakThis = WeakPtr<Extract>(
-                    m_tptr.template ConstCast<RemoveCV<T>>().template Cast<Extract>(), m_cb);
+    template <typename U>
+    inline void InitEnableSharedFromThis(RawPtr<U> ptr) {
+        if constexpr (detail::ExtractEnableSharedFromThis<U>::value) {
+            using Extract = detail::ExtractEnableSharedFromThis<U>;
+
+            auto esft = ptr
+                .template ConstCast<RemoveCV<U>>()
+                .template Cast<EnableSharedFromThis<Extract>>();
+
+            esft->m_weakThis = WeakPtr<Extract>(
+                ptr.template ConstCast<RemoveCV<U>>()
+                .template Cast<Extract>(),
+                m_cb
+            );
         }
     }
+    template <typename U>
+    inline SharedPtr(RawPtr<U> ptr, RawPtr<detail::ControlBlockBase<>> cb, detail::AdoptControlBlockTag)
+        : m_tptr(ptr.template Cast<T>()), m_cb(cb) {InitEnableSharedFromThis<U>(ptr);}
 
-    inline SharedPtr(RawPtr<T> tptr, RawPtr<detail::ControlBlockBase<>> cb): m_tptr(tptr), m_cb(cb) {
-        if (cb) m_cb->Ref(); CheckEnableSharedFromThis();
-    }
+    inline SharedPtr(RawPtr<T> ptr, RawPtr<detail::ControlBlockBase<>> cb, detail::ShareControlBlockTag)
+        : m_tptr(ptr), m_cb(cb) { if (m_cb) m_cb->Ref(); }
+
+    inline SharedPtr(RawPtr<T> ptr, RawPtr<detail::ControlBlockBase<>> cb, detail::RefAlreadyAcquiredTag)
+        : m_tptr(ptr), m_cb(cb) {}
 public:
     // Types
     using Type = T;
@@ -214,35 +247,25 @@ public:
     inline constexpr SharedPtr() = default;
     inline constexpr SharedPtr(std::nullptr_t): m_tptr(nullptr), m_cb(nullptr) {}
 
-    inline constexpr SharedPtr(RawPtr<T> ptr): m_tptr(ptr), m_cb(new detail::ControlBlock<T>(ptr)) { CheckEnableSharedFromThis(); }
+    inline constexpr SharedPtr(RawPtr<T> ptr): SharedPtr(ptr, new detail::ControlBlock<T>(ptr), detail::AdoptControlBlock) {}
     template <typename Deleter>
     requires InvokeAble<Deleter, T*>
-    inline constexpr SharedPtr(RawPtr<T> ptr, Deleter deleter): m_tptr(ptr), m_cb(new detail::ControlBlockDeleter<T, Deleter>(ptr, std::move(deleter))) {
-        CheckEnableSharedFromThis();
-    }
+    inline constexpr SharedPtr(RawPtr<T> ptr, Deleter deleter): SharedPtr(ptr, new detail::ControlBlockDeleter<T, Deleter>(ptr, std::move(deleter)), detail::AdoptControlBlock) {}
     template <typename Deleter, typename Allocator>
     requires InvokeAble<Deleter, T*>
     inline constexpr SharedPtr(RawPtr<T> ptr, Deleter deleter, Allocator allocator)
-        : m_tptr(ptr), m_cb(new detail::ControlBlockDeleterAllocator<T, Deleter, Allocator>(ptr, std::move(deleter), std::move(allocator))) {
-            CheckEnableSharedFromThis();
-    }
+        : SharedPtr(ptr, new detail::ControlBlockDeleterAllocator<T, Deleter, Allocator>(ptr, std::move(deleter), std::move(allocator)), detail::AdoptControlBlock) {}
     
     template <typename U>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
-    inline constexpr SharedPtr(RawPtr<U> ptr): m_tptr(ptr.template Cast<T>()), m_cb(new detail::ControlBlock<U>(m_tptr.template Cast<U>())) {
-        CheckEnableSharedFromThis();
-    }
+    inline constexpr SharedPtr(RawPtr<U> ptr): SharedPtr(ptr, new detail::ControlBlock<U>(ptr.template Cast<U>()), detail::AdoptControlBlock) {}
     template <typename U, typename Deleter>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
-    inline constexpr SharedPtr(RawPtr<U> ptr, Deleter deleter): m_tptr(ptr.template Cast<T>()), m_cb(new detail::ControlBlockDeleter<U, Deleter>(m_tptr.template Cast<U>(), std::move(deleter))) {
-        CheckEnableSharedFromThis();
-    }
+    inline constexpr SharedPtr(RawPtr<U> ptr, Deleter deleter): SharedPtr(ptr, new detail::ControlBlockDeleter<U, Deleter>(ptr.template Cast<U>(), std::move(deleter)), detail::AdoptControlBlock) {}
     template <typename U, typename Deleter, typename Allocator>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
     inline constexpr SharedPtr(RawPtr<U> ptr, Deleter deleter, Allocator allocator)
-        : m_tptr(ptr.template Cast<T>()), m_cb(new detail::ControlBlockDeleterAllocator<U, Deleter, Allocator>(m_tptr.template Cast<U>(), std::move(deleter), std::move(allocator))) {
-            CheckEnableSharedFromThis();
-    }
+        : SharedPtr(ptr, new detail::ControlBlockDeleterAllocator<U, Deleter, Allocator>(ptr.template Cast<U>(), std::move(deleter), std::move(allocator)), detail::AdoptControlBlock) {}
 
     template <typename U>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
@@ -254,18 +277,14 @@ public:
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
     inline constexpr SharedPtr(U* ptr, Deleter deleter, Allocator allocator): SharedPtr(RawPtr<U>(ptr), std::move(deleter), std::move(allocator)) {}
 
-    inline SharedPtr(const SharedPtr<T>& other) noexcept: m_tptr(other.m_tptr), m_cb(other.m_cb) {
-        if (m_cb) m_cb->Ref();
-    }
+    inline SharedPtr(const SharedPtr<T>& other) noexcept: SharedPtr(other.m_tptr, other.m_cb, detail::ShareControlBlock) {}
     inline SharedPtr(SharedPtr<T>&& other) noexcept: m_tptr(std::move(other.m_tptr)), m_cb(std::move(other.m_cb)) {
         other.m_tptr = nullptr;
         other.m_cb = nullptr;
     }
     template <typename U>
     requires DerivedFrom<U, T> || Void<T>
-    inline SharedPtr(const SharedPtr<U>& other) noexcept: m_tptr(other.m_tptr.template Cast<T>()), m_cb(other.m_cb) {
-        if (m_cb) m_cb->Ref();
-    }
+    inline SharedPtr(const SharedPtr<U>& other) noexcept: SharedPtr(other.m_tptr.template Cast<T>(), other.m_cb, detail::ShareControlBlock) {}
     template <typename U>
     requires DerivedFrom<U, T> || Void<T>
     inline SharedPtr(SharedPtr<U>&& other) noexcept: m_tptr(other.m_tptr.template Cast<T>()), m_cb(other.m_cb) {
@@ -383,7 +402,7 @@ public:
     template <typename U>
     requires Castable<T, U>
     inline SharedPtr<U> Cast() const noexcept {
-        return SharedPtr<U>(m_tptr.template Cast<U>(), m_cb);
+        return SharedPtr<U>(m_tptr.template Cast<U>(), m_cb, detail::ShareControlBlock);
     }
 
     /// @brief Dynamic cast the pointer
@@ -391,7 +410,7 @@ public:
     inline SharedPtr<U> DynamicCast() const noexcept {
         auto realPtr = m_tptr.template DynamicCast<U>();
         if (realPtr) {
-            return SharedPtr<U>(realPtr, m_cb);
+            return SharedPtr<U>(realPtr, m_cb, detail::ShareControlBlock);
         }
         return SharedPtr<U>(nullptr);
     }
@@ -400,13 +419,13 @@ public:
     template <typename U>
     requires ConstCastable<T, U>
     inline SharedPtr<U> ConstCast() const noexcept {
-        return SharedPtr<U>(m_tptr.template ConstCast<U>(), m_cb);
+        return SharedPtr<U>(m_tptr.template ConstCast<U>(), m_cb, detail::ShareControlBlock);
     }
 
     /// @brief Reinterpret cast the pointer
     template <typename U>
     inline SharedPtr<U> ReinterpretCast() const noexcept {
-        return SharedPtr<U>(m_tptr.template ReinterpretCast<U>(), m_cb);
+        return SharedPtr<U>(m_tptr.template ReinterpretCast<U>(), m_cb, detail::ShareControlBlock);
     }
 
     // Helper operators (forward operators to RawPtr)
@@ -445,9 +464,10 @@ class WeakPtr {
     friend class WeakPtr;
     template <typename U>
     friend class SharedPtr;
-protected:
+private:
     RawPtr<T> m_tptr;
     RawPtr<detail::ControlBlockBase<>> m_cb = nullptr;
+
     inline WeakPtr(RawPtr<T> tptr, RawPtr<detail::ControlBlockBase<>> cb): m_tptr(tptr), m_cb(cb) {
         if (m_cb) m_cb->WeakRef();
     }
@@ -468,7 +488,7 @@ public:
         if (m_cb) m_cb->WeakRef();
     }
     template <typename U>
-    requires DerivedFrom<U, T>
+    requires DerivedFrom<U, T> || Void<T>
     inline WeakPtr(const WeakPtr<U>& other) noexcept: m_tptr(other.m_tptr.template Cast<T>()), m_cb(other.m_cb) {
         if (m_cb) m_cb->WeakRef();
     }
@@ -541,20 +561,19 @@ public:
 
     // Interface methods
     inline bool Expired() const noexcept {
-        return !m_cb || m_cb->shared_count == 0;
+        return !m_cb || m_cb->shared_count.load(std::memory_order_acquire) == 0;
     }
     
     inline SharedPtr<T> Lock() const noexcept {
-        if (Expired()) {
-            return SharedPtr<T>(nullptr);
-        }
-        return SharedPtr<T>(m_tptr, m_cb);
+        if (!m_cb || !m_cb->TryRef())
+            return nullptr;
+        return SharedPtr<T>(m_tptr, m_cb, detail::RefAlreadyAcquired);
     }
 
     inline constexpr bool IsConst() const noexcept { return std::is_const_v<T>; }
 
     inline size_t UseCount() const noexcept {
-        return m_cb ? size_t(m_cb->shared_count) : 0;
+        return m_cb ? m_cb->shared_count.load(std::memory_order_relaxed) : 0;
     }
 };
 
@@ -570,7 +589,7 @@ inline SharedPtr<T> MakeShared(Args&&... args) {
         
         CbWithT(Args&&... args) {
             new (mem) T(std::forward<Args>(args)...); // Placement new to construct T in the memory
-            this->shared_count = 0; // Start with 0 for the initial shared_ptr
+            this->shared_count = 1;
         }
 
         void Destory() override {
@@ -581,12 +600,8 @@ inline SharedPtr<T> MakeShared(Args&&... args) {
             delete this; // Deallocate the control block itself
         }
     };
-    try {
-        auto cb = new CbWithT{std::forward<Args>(args)...};
-        return SharedPtr<T>(RawPtr<T>(reinterpret_cast<T*>(cb->mem)), cb);
-    } catch (...) {
-        throw;
-    }
+    auto cb = new CbWithT{std::forward<Args>(args)...};
+    return SharedPtr<T>(RawPtr<T>(reinterpret_cast<T*>(cb->mem)), cb, detail::AdoptControlBlock);
 };
 
 template <typename T, typename... Args>
