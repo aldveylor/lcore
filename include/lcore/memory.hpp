@@ -218,7 +218,7 @@ private:
     template <typename U>
     inline void InitEnableSharedFromThis(RawPtr<U> ptr) {
         if constexpr (detail::ExtractEnableSharedFromThis<U>::value) {
-            using Extract = detail::ExtractEnableSharedFromThis<U>;
+            using Extract = typename detail::ExtractEnableSharedFromThis<U>::type;
 
             auto esft = ptr
                 .template ConstCast<RemoveCV<U>>()
@@ -265,17 +265,20 @@ public:
     template <typename U, typename Deleter, typename Allocator>
     requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
     inline constexpr SharedPtr(RawPtr<U> ptr, Deleter deleter, Allocator allocator)
-        : SharedPtr(ptr, new detail::ControlBlockDeleterAllocator<U, Deleter, Allocator>(ptr.template Cast<U>(), std::move(deleter), std::move(allocator)), detail::AdoptControlBlock) {}
+        : SharedPtr(ptr, RawPtr<detail::ControlBlockBase<>>(
+            new detail::ControlBlockDeleterAllocator<U, Deleter, Allocator>(
+                ptr.template Cast<U>(), std::move(deleter), std::move(allocator))
+        ), detail::AdoptControlBlock) {}
 
-    template <typename U>
-    requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
-    inline constexpr SharedPtr(U* ptr): SharedPtr(RawPtr<U>(ptr)) {}
-    template <typename U, typename Deleter>
-    requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
-    inline constexpr SharedPtr(U* ptr, Deleter deleter): SharedPtr(RawPtr<U>(ptr), std::move(deleter)) {}
-    template <typename U, typename Deleter, typename Allocator>
-    requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
-    inline constexpr SharedPtr(U* ptr, Deleter deleter, Allocator allocator): SharedPtr(RawPtr<U>(ptr), std::move(deleter), std::move(allocator)) {}
+    // template <typename U>
+    // requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
+    // inline constexpr SharedPtr(U* ptr): SharedPtr(RawPtr<U>(ptr)) {}
+    // template <typename U, typename Deleter>
+    // requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
+    // inline constexpr SharedPtr(U* ptr, Deleter deleter): SharedPtr(RawPtr<U>(ptr), std::move(deleter)) {}
+    // template <typename U, typename Deleter, typename Allocator>
+    // requires ((DerivedFrom<U, T> || Void<T>) && !Same<U, T>)
+    // inline constexpr SharedPtr(U* ptr, Deleter deleter, Allocator allocator): SharedPtr(RawPtr<U>(ptr), std::move(deleter), std::move(allocator)) {}
 
     inline SharedPtr(const SharedPtr<T>& other) noexcept: SharedPtr(other.m_tptr, other.m_cb, detail::ShareControlBlock) {}
     inline SharedPtr(SharedPtr<T>&& other) noexcept: m_tptr(std::move(other.m_tptr)), m_cb(std::move(other.m_cb)) {
