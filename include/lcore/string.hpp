@@ -59,8 +59,11 @@ public:
 
 class StringStream: public std::stringstream {
 public:
-    String str() const {
+    String str() const & {
         return std::stringstream::str();
+    };
+    String str() && {
+        return std::stringstream(std::move(*this)).str();
     };
     void str(const std::string& str) {
         return std::stringstream::str(str);
