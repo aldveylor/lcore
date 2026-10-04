@@ -13,17 +13,18 @@ LCORE_NAMESPACE_BEGIN
 class String;
 class StringStream;
 
+/** @brief Non-owning string view with constexpr construction and slicing. */
 class StringView: public std::string_view {
 public:
     using std::string_view::basic_string_view;
-    inline StringView(const std::string& string);
-    inline StringView(std::string_view view);
-    inline StringView(const char* str);
+    inline constexpr StringView(const std::string& string) noexcept;
+    inline constexpr StringView(std::string_view view) noexcept;
+    inline constexpr StringView(const char* str) noexcept;
 
     inline String operator+(StringView rhs) const;
-    inline StringView substr(size_t pos, size_t n = npos) const;
-    inline StringView trim(size_t lpos, size_t rpos) const;
-    inline StringView center(size_t lslice, size_t rslice) const;
+    inline constexpr StringView substr(size_t pos, size_t n = npos) const;
+    inline constexpr StringView trim(size_t lpos, size_t rpos) const;
+    inline constexpr StringView center(size_t lslice, size_t rslice) const;
     inline bool isdigit() const noexcept;
 
     template <Iterable Container>
@@ -106,9 +107,9 @@ private:
     const char* m_cstr = nullptr;
 };
 
-inline StringView::StringView(const std::string& string): std::string_view(string.data(), string.size()) {}
-inline StringView::StringView(std::string_view view): std::string_view(view) {}
-inline StringView::StringView(const char* str): std::string_view(str) {}
+inline constexpr StringView::StringView(const std::string& string) noexcept: std::string_view(string.data(), string.size()) {}
+inline constexpr StringView::StringView(std::string_view view) noexcept: std::string_view(view) {}
+inline constexpr StringView::StringView(const char* str) noexcept: std::string_view(str) {}
 
 inline String StringView::operator+(StringView rhs) const{
     StringStream ss;
@@ -116,16 +117,16 @@ inline String StringView::operator+(StringView rhs) const{
     return ss.str();
 };
 
-inline StringView StringView::substr(size_t pos, size_t n) const {
+inline constexpr StringView StringView::substr(size_t pos, size_t n) const {
     return std::string_view::substr(pos, n);
 };
 // Select the half-open interval [lpos, rpos).
-inline StringView StringView::trim(size_t lpos, size_t rpos) const {
+inline constexpr StringView StringView::trim(size_t lpos, size_t rpos) const {
     if (lpos > rpos || rpos > size()) throw std::out_of_range("StringView::trim");
     return substr(lpos, rpos - lpos);
 };
 // Remove lslice characters from the left and rslice characters from the right.
-inline StringView StringView::center(size_t lslice, size_t rslice) const {
+inline constexpr StringView StringView::center(size_t lslice, size_t rslice) const {
     if (lslice > size() || rslice > size() - lslice) throw std::out_of_range("StringView::center");
     return substr(lslice, size() - lslice - rslice);
 };
