@@ -118,8 +118,10 @@ private:
 };
 
 /** @brief Match --name=value using a template constant for the option name. */
-template <StringConstant Name, bool Positional = (Name.size() == 0)>
+template <StringConstant Name>
 struct ParserArgumentMatcher {
+    static_assert(Name.size() > 0, "Option names must not be empty");
+
     static constexpr bool Match(StringView argument, StringView& value) noexcept {
         if (argument.size() < Name.size() + 3
             || argument[0] != '-' || argument[1] != '-'
@@ -136,16 +138,6 @@ private:
     }
 };
 
-/** @brief Partial specialization for unnamed positional argument bindings. */
-template <StringConstant Name>
-struct ParserArgumentMatcher<Name, true> {
-    static constexpr bool Match(StringView argument, StringView& value) noexcept {
-        if (argument.starts_with("--")) return false;
-        value = argument;
-        return true;
-    }
-};
-
 }
 
 /**
@@ -155,7 +147,8 @@ struct ParserArgumentMatcher<Name, true> {
  *       storing StringView also borrow the argument strings. Named options use
  *       --name=value or -n value; switches use --name or -n. Registered options
  *       take priority over positional bindings, including for negative numbers.
- *       An unnamed binding consumes all arguments following a standalone --.
+ *       Bind<T> and BindMulti<T> bind positional arguments and consume all
+ *       arguments following a standalone --.
  */
 template <typename Iterator = ArgvIterator>
 requires std::same_as<typename Iterator::value_type, StringView>
@@ -169,16 +162,34 @@ public:
     requires requires(Iterator iterator) { { iterator.end() } -> std::same_as<Iterator>; }
         : ArgumentParser(begin, begin.end()) {}
 
-    /** @brief Bind a reference; repeated matches replace its value in argument order. */
+    /** @brief Bind positional arguments to a reference; repeated matches replace its value. */
+    template <typename T>
+    ArgumentParser& Bind(T& target) {
+        return BindPositionalValue([&target](StringView value) {
+            target = ParserDeserializer<T>{}.deserialize(value);
+        });
+    }
+
+    /** @brief Bind positional arguments to a container; append without clearing it. */
+    template <typename T, typename Container = Vector<T>>
+    ArgumentParser& BindMulti(Container& target) {
+        return BindPositionalValue([&target](StringView value) {
+            target.push_back(ParserDeserializer<T>{}.deserialize(value));
+        });
+    }
+
+    /** @brief Bind a named option to a reference; repeated matches replace its value. */
     template <StringConstant Name, typename T>
+    requires (Name.size() > 0)
     ArgumentParser& Bind(T& target) {
         return BindValue<Name>([&target](StringView value) {
             target = ParserDeserializer<T>{}.deserialize(value);
         });
     }
 
-    /** @brief Bind a container; append each deserialized match without clearing it. */
+    /** @brief Bind a named option to a container; append without clearing it. */
     template <StringConstant Name, typename T, typename Container = Vector<T>>
+    requires (Name.size() > 0)
     ArgumentParser& BindMulti(Container& target) {
         return BindValue<Name>([&target](StringView value) {
             target.push_back(ParserDeserializer<T>{}.deserialize(value));
@@ -249,25 +260,33 @@ private:
 
     template <StringConstant Name, typename Assign>
     ArgumentParser& BindValue(Assign assign) {
-        return RegisterBinding<Name.size() == 0>(
-            [assign = std::move(assign), end = m_end](Iterator& current) {
-                if (current == end) return false;
-                if constexpr (Name.size() == 0) {
-                    if (*current == "--") {
-                        ++current;
-                        while (current != end) {
-                            assign(*current);
-                            ++current;
-                        }
-                        return true;
-                    }
-                }
-                StringView value;
-                if (!detail::ParserArgumentMatcher<Name>::Match(*current, value)) return false;
-                assign(value);
+        return RegisterBinding<false>([assign = std::move(assign)](Iterator& current) {
+            StringView value;
+            if (!detail::ParserArgumentMatcher<Name>::Match(*current, value)) return false;
+            assign(value);
+            ++current;
+            return true;
+        });
+    }
+
+    template <typename Assign>
+    ArgumentParser& BindPositionalValue(Assign assign) {
+        return RegisterBinding<true>([assign = std::move(assign), end = m_end](Iterator& current) {
+            if (current == end) return false;
+            const StringView argument = *current;
+            if (argument == "--") {
                 ++current;
+                while (current != end) {
+                    assign(*current);
+                    ++current;
+                }
                 return true;
-            });
+            }
+            if (argument.starts_with("--")) return false;
+            assign(argument);
+            ++current;
+            return true;
+        });
     }
 
     template <StringConstant Name, bool Short>
