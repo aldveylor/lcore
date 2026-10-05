@@ -173,6 +173,11 @@ public:
     requires requires(Iterator iterator) { { iterator.end() } -> std::same_as<Iterator>; }
         : ArgumentParser(begin, begin.end()) {}
 
+    /** @brief Reserve capacity for the specified number of bindings. */
+    void ReserveBinding(std::size_t capacity) {
+        m_bindings.reserve(capacity);
+    }
+
     /** @brief Bind exactly one positional argument to a reference. */
     template <typename T>
     ArgumentParser& Bind(T& target) {
