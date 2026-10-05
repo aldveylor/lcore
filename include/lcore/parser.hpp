@@ -12,18 +12,6 @@
 
 LCORE_NAMESPACE_BEGIN
 
-/** @brief Structural string constant usable as a C++20 non-type template argument. */
-template <std::size_t N>
-struct StringConstant {
-    char data[N];
-
-    constexpr StringConstant(const char (&value)[N]) noexcept {
-        for (std::size_t i = 0; i < N; ++i) data[i] = value[i];
-    }
-
-    constexpr std::size_t size() const noexcept { return N - 1; }
-};
-
 /** @brief Forward iterator adapting argc/argv to borrowed StringView arguments. */
 class ArgvIterator {
 public:

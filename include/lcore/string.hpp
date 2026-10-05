@@ -4,6 +4,7 @@
 #include <string_view>
 #include <sstream>
 #include <cctype>
+#include <cstddef>
 #include <stdexcept>
 #include <utility>
 #include "traits.hpp"
@@ -56,6 +57,49 @@ public:
 
     template <Iterable Container>
     inline static String Join(Container&& container, StringView sep);
+};
+
+/**
+ * @brief Structural string constant usable as a C++20 non-type template argument.
+ * @tparam N Array size including the trailing null character.
+ * @note Views and iterators borrow this object's storage. Iteration excludes
+ *       the trailing null character; embedded null characters are preserved.
+ */
+template <std::size_t N>
+struct StringConstant {
+    static_assert(N > 0, "StringConstant requires a trailing null character");
+
+    char data[N];
+
+    constexpr StringConstant(const char (&value)[N]) noexcept {
+        for (std::size_t i = 0; i < N; ++i) data[i] = value[i];
+    }
+
+    constexpr std::size_t size() const noexcept { return N - 1; }
+    constexpr bool empty() const noexcept { return size() == 0; }
+    constexpr const char* c_str() const noexcept { return data; }
+    constexpr char operator[](std::size_t index) const noexcept { return data[index]; }
+    constexpr char at(std::size_t index) const { return view().at(index); }
+    constexpr const char* begin() const noexcept { return data; }
+    constexpr const char* end() const noexcept { return data + size(); }
+
+    constexpr StringView view() const noexcept { return StringView(data, size()); }
+    constexpr operator StringView() const noexcept { return view(); }
+    String str() const { return String(view()); }
+
+    constexpr int compare(StringView other) const noexcept { return view().compare(other); }
+    constexpr bool operator==(StringView other) const noexcept { return view() == other; }
+
+    template <std::size_t M>
+    constexpr bool operator==(const StringConstant<M>& other) const noexcept {
+        return view() == other.view();
+    }
+
+    constexpr bool starts_with(StringView prefix) const noexcept { return view().starts_with(prefix); }
+    constexpr bool ends_with(StringView suffix) const noexcept { return view().ends_with(suffix); }
+    constexpr StringView substr(std::size_t pos, std::size_t count = StringView::npos) const {
+        return view().substr(pos, count);
+    }
 };
 
 class StringStream: public std::stringstream {
