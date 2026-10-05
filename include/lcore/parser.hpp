@@ -58,6 +58,25 @@ struct ParserDeserializer<bool> {
 
 namespace detail {
 
+/** @brief Match a complete long or short option against its template name. */
+template <StringConstant Name, bool Short = false>
+struct ParserOptionMatcher {
+    static_assert(Name.size() > 0, "Option names must not be empty");
+
+    static constexpr bool Match(StringView argument) noexcept {
+        constexpr std::size_t prefixSize = Short ? 1 : 2;
+        return argument.size() == Name.size() + prefixSize
+            && argument[0] == '-' && (Short || argument[1] == '-')
+            && MatchesCharacters(argument, std::make_index_sequence<Name.size()>{});
+    }
+
+private:
+    template <std::size_t... Indices>
+    static constexpr bool MatchesCharacters(StringView argument, std::index_sequence<Indices...>) noexcept {
+        return ((argument[Indices + (Short ? 1 : 2)] == Name.data[Indices]) && ...);
+    }
+};
+
 /** @brief Match --name=value using a template constant for the option name. */
 template <StringConstant Name, bool Positional = (Name.size() == 0)>
 struct ParserArgumentMatcher {
@@ -93,7 +112,8 @@ struct ParserArgumentMatcher<Name, true> {
  * @brief Parse command-line arguments into bound references using template names.
  * @note Skips argv[0]. Arguments and bound targets must outlive parsing; targets
  *       storing StringView also borrow the argument strings. Named options use
- *       --name=value. Other arguments are positional, including negative numbers.
+ *       --name=value or -n value; switches use --name or -n. Registered options
+ *       take priority over positional bindings, including for negative numbers.
  *       A standalone -- makes all subsequent arguments positional.
  */
 class ArgumentParser {
@@ -108,11 +128,11 @@ public:
     /** @brief Bind a reference; repeated matches replace its value in argument order. */
     template <StringConstant Name, typename T>
     ArgumentParser& Bind(T& target) {
-        m_bindings.emplace_back([&target](StringView argument, bool positional) {
+        m_bindings.emplace_back([&target](StringView argument, const char*, bool positional) {
             StringView value;
-            if (!detail::ParserArgumentMatcher<Name>::Match(argument, positional, value)) return false;
+            if (!detail::ParserArgumentMatcher<Name>::Match(argument, positional, value)) return 0;
             target = ParserDeserializer<T>{}.deserialize(value);
-            return true;
+            return 1;
         });
         return *this;
     }
@@ -120,45 +140,102 @@ public:
     /** @brief Bind a container; append each deserialized match without clearing it. */
     template <StringConstant Name, typename T, typename Container = Vector<T>>
     ArgumentParser& BindMulti(Container& target) {
-        m_bindings.emplace_back([&target](StringView argument, bool positional) {
+        m_bindings.emplace_back([&target](StringView argument, const char*, bool positional) {
             StringView value;
-            if (!detail::ParserArgumentMatcher<Name>::Match(argument, positional, value)) return false;
+            if (!detail::ParserArgumentMatcher<Name>::Match(argument, positional, value)) return 0;
             target.push_back(ParserDeserializer<T>{}.deserialize(value));
-            return true;
+            return 1;
         });
         return *this;
     }
 
+    /** @brief Bind --name to a boolean; set it to true when the switch is present. */
+    template <StringConstant Name>
+    ArgumentParser& BindSwitch(bool& target) {
+        return BindOptionSwitch<Name, false>(target);
+    }
+
+    /** @brief Bind -n to a boolean; set it to true when the switch is present. */
+    template <StringConstant Name>
+    ArgumentParser& BindShortSwitch(bool& target) {
+        return BindOptionSwitch<Name, true>(target);
+    }
+
+    /** @brief Bind -n value to a reference; repeated matches replace its value. */
+    template <StringConstant Name, typename T>
+    ArgumentParser& BindShort(T& target) {
+        return BindShortValue<Name>([&target](StringView value) {
+            target = ParserDeserializer<T>{}.deserialize(value);
+        });
+    }
+
+    /** @brief Bind -n value to a container; append each deserialized value. */
+    template <StringConstant Name, typename T, typename Container = Vector<T>>
+    ArgumentParser& BindShortMulti(Container& target) {
+        return BindShortValue<Name>([&target](StringView value) {
+            target.push_back(ParserDeserializer<T>{}.deserialize(value));
+        });
+    }
+
     /**
-     * @brief Parse into the first registered binding matching each argument.
-     * @throws std::invalid_argument For an unbound argument or invalid value.
+     * @brief Parse using the first matching option, then positional binding.
+     * @throws std::invalid_argument For an unbound argument, missing short option
+     *         value, or invalid value.
      * @note Conversion exceptions propagate. Earlier assignments remain on failure;
      *       calling Parse again reapplies assignments and appends multi-values again.
+     *       Short values consume the next argument even if it begins with '-'.
      */
     void Parse() const {
         bool positionalOnly = false;
-        for (int i = 1; i < m_argc; ++i) {
+        for (int i = 1; i < m_argc;) {
             const StringView argument(m_argv[i]);
             if (!positionalOnly && argument == "--") {
                 positionalOnly = true;
+                ++i;
                 continue;
             }
-            const bool positional = positionalOnly || !argument.starts_with("--");
-            bool matched = false;
-            for (const auto& binding: m_bindings) {
-                if (binding(argument, positional)) {
-                    matched = true;
-                    break;
-                }
+            const char* next = i + 1 < m_argc ? m_argv[i + 1] : nullptr;
+            int consumed = positionalOnly ? 0 : ApplyBinding(argument, next, false);
+            if (consumed == 0 && (positionalOnly || !argument.starts_with("--"))) {
+                consumed = ApplyBinding(argument, next, true);
             }
-            if (!matched) throw std::invalid_argument("ArgumentParser: unbound argument");
+            if (consumed == 0) throw std::invalid_argument("ArgumentParser: unbound argument");
+            i += consumed;
         }
     }
 
 private:
+    template <StringConstant Name, bool Short>
+    ArgumentParser& BindOptionSwitch(bool& target) {
+        m_bindings.emplace_back([&target](StringView argument, const char*, bool positional) {
+            if (positional || !detail::ParserOptionMatcher<Name, Short>::Match(argument)) return 0;
+            target = true;
+            return 1;
+        });
+        return *this;
+    }
+
+    template <StringConstant Name, typename Assign>
+    ArgumentParser& BindShortValue(Assign assign) {
+        m_bindings.emplace_back([assign = std::move(assign)](StringView argument, const char* next, bool positional) {
+            if (positional || !detail::ParserOptionMatcher<Name, true>::Match(argument)) return 0;
+            if (!next) throw std::invalid_argument("ArgumentParser: missing short option value");
+            assign(StringView(next));
+            return 2;
+        });
+        return *this;
+    }
+
+    int ApplyBinding(StringView argument, const char* next, bool positional) const {
+        for (const auto& binding: m_bindings) {
+            if (const int consumed = binding(argument, next, positional)) return consumed;
+        }
+        return 0;
+    }
+
     int m_argc;
     const char* const* m_argv;
-    Vector<std::function<bool(StringView, bool)>> m_bindings;
+    Vector<std::function<int(StringView, const char*, bool)>> m_bindings;
 };
 
 LCORE_NAMESPACE_END
