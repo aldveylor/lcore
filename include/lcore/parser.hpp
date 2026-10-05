@@ -1,16 +1,58 @@
 #pragma once
 #include "string.hpp"
+#include "exception.hpp"
 #include "container/vector.hpp"
 #include <charconv>
 #include <concepts>
 #include <cstddef>
 #include <functional>
 #include <iterator>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
 LCORE_NAMESPACE_BEGIN
+
+/** @brief Invalid argc/argv supplied to ArgvIterator. */
+class ParserInvalidInputError final: public Exception {
+public:
+    /** @brief Return the fixed diagnostic for invalid iterator input. */
+    const char* what() const noexcept override { return "ArgumentParser: invalid argc/argv"; }
+};
+
+/** @brief An argument has no matching registered binding. */
+class ParserUnboundArgumentError final: public Exception {
+public:
+    /** @brief Return the fixed diagnostic for an unbound argument. */
+    const char* what() const noexcept override { return "ArgumentParser: unbound argument"; }
+};
+
+/** @brief A required binding received no values. */
+class ParserMissingArgumentError final: public Exception {
+public:
+    /** @brief Return the fixed diagnostic for a missing required argument. */
+    const char* what() const noexcept override { return "ArgumentParser: required argument missing"; }
+};
+
+/** @brief A short option has no following value. */
+class ParserMissingValueError final: public Exception {
+public:
+    /** @brief Return the fixed diagnostic for a missing option value. */
+    const char* what() const noexcept override { return "ArgumentParser: missing option value"; }
+};
+
+/** @brief A value cannot be deserialized into its bound type. */
+class ParserInvalidValueError final: public Exception {
+public:
+    /** @brief Return the fixed diagnostic for an invalid value. */
+    const char* what() const noexcept override { return "ArgumentParser: invalid value"; }
+};
+
+/** @brief A numeric value exceeds the range of its bound type. */
+class ParserValueOutOfRangeError final: public Exception {
+public:
+    /** @brief Return the fixed diagnostic for an out-of-range value. */
+    const char* what() const noexcept override { return "ArgumentParser: value out of range"; }
+};
 
 /** @brief Forward iterator adapting argc/argv to borrowed StringView arguments. */
 class ArgvIterator {
@@ -27,7 +69,7 @@ public:
     /** @brief Skip argv[0]; all argc entries must be non-null and outlive the iterator. */
     constexpr ArgvIterator(int argc, const char* const* argv) {
         if (argc < 0 || (argc > 0 && !argv)) {
-            throw std::invalid_argument("ArgvIterator: invalid argc/argv");
+            throw ParserInvalidInputError();
         }
         m_current = argc > 0 ? argv + 1 : argv;
         m_end = argc > 0 ? argv + argc : argv;
@@ -73,14 +115,14 @@ template <typename T>
 requires (std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
 struct ParserDeserializer<T> {
     T deserialize(StringView value) {
-        if (value.empty()) throw std::invalid_argument("ArgumentParser: empty number");
+        if (value.empty()) throw ParserInvalidValueError();
         T result;
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
         if (parsed.ec == std::errc::result_out_of_range) {
-            throw std::out_of_range("ArgumentParser: number out of range");
+            throw ParserValueOutOfRangeError();
         }
         if (parsed.ec != std::errc() || parsed.ptr != value.data() + value.size()) {
-            throw std::invalid_argument("ArgumentParser: invalid number");
+            throw ParserInvalidValueError();
         }
         return result;
     }
@@ -92,7 +134,7 @@ struct ParserDeserializer<bool> {
     bool deserialize(StringView value) {
         if (value == "true" || value == "1") return true;
         if (value == "false" || value == "0") return false;
-        throw std::invalid_argument("ArgumentParser: invalid boolean");
+        throw ParserInvalidValueError();
     }
 };
 
@@ -226,8 +268,10 @@ public:
 
     /**
      * @brief Parse using the first matching option, then positional binding.
-     * @throws std::invalid_argument For an unbound argument, missing short option
-     *         value, or invalid value.
+     * @throws ParserUnboundArgumentError For an unbound argument.
+     * @throws ParserMissingValueError For a short option without a value.
+     * @throws ParserInvalidValueError For an invalid built-in value.
+     * @throws ParserValueOutOfRangeError For a built-in numeric overflow.
      * @note Conversion exceptions propagate. Earlier assignments remain on failure;
      *       calling Parse again reapplies assignments and appends multi-values again.
      *       Short values consume the next argument even if it begins with '-'.
@@ -242,7 +286,7 @@ public:
                     break;
                 }
             }
-            if (!matched) throw std::invalid_argument("ArgumentParser: unbound argument");
+            if (!matched) throw ParserUnboundArgumentError();
         }
     }
 
@@ -305,7 +349,7 @@ private:
             if (!detail::ParserOptionMatcher<Name, true>::Match(*current)) return false;
             auto value = current;
             ++value;
-            if (value == end) throw std::invalid_argument("ArgumentParser: missing short option value");
+            if (value == end) throw ParserMissingValueError();
             assign(*value);
             ++value;
             current = std::move(value);
