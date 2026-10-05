@@ -2,7 +2,6 @@
 #include "string.hpp"
 #include "exception.hpp"
 #include "container/vector.hpp"
-#include <array>
 #include <charconv>
 #include <concepts>
 #include <cstddef>
@@ -159,8 +158,12 @@ template <typename Iterator = ArgvIterator>
 requires std::same_as<typename Iterator::value_type, StringView>
 class ArgumentParser {
 public:
-    /** @brief Callback receiving the current argument and the range's end iterator. */
-    using Handler = std::function<void(Iterator&, Iterator)>;
+    /** @brief Callback receiving a positional value or an option name without its prefix. */
+    using ArgumentHandler = std::function<void(StringView)>;
+    /** @brief Callback receiving the separate key and value of --key=value. */
+    using OptionHandler = std::function<void(StringView, StringView)>;
+    /** @brief Callback receiving the -- iterator and the end of the unparsed tail. */
+    using TerminatorHandler = std::function<void(Iterator&, Iterator)>;
 
     /** @brief Construct from the half-open argument range [begin, end). */
     ArgumentParser(Iterator begin, Iterator end): m_begin(std::move(begin)), m_end(std::move(end)) {}
@@ -252,34 +255,34 @@ public:
         });
     }
 
-    /** @brief Handle unbound positional values; unchanged cursors advance by one afterward. */
-    ArgumentParser& setUnknownPositionalHandler(Handler handler) {
-        return setHandler(ArgumentKind::Positional, std::move(handler));
+    /** @brief Handle an unbound positional value; an empty callback restores the throwing default. */
+    ArgumentParser& setUnknownPositionalHandler(ArgumentHandler handler) {
+        return setHandler(m_unknownPositionalHandler, std::move(handler));
     }
 
-    /** @brief Handle unbound --name switches; unchanged cursors advance by one afterward. */
-    ArgumentParser& setUnknownSwitchHandler(Handler handler) {
-        return setHandler(ArgumentKind::Switch, std::move(handler));
+    /** @brief Handle unbound --name with the name, excluding --. */
+    ArgumentParser& setUnknownSwitchHandler(ArgumentHandler handler) {
+        return setHandler(m_unknownSwitchHandler, std::move(handler));
     }
 
-    /** @brief Handle unbound -name options; the callback may consume following values. */
-    ArgumentParser& setUnknownShortHandler(Handler handler) {
-        return setHandler(ArgumentKind::Short, std::move(handler));
+    /** @brief Handle unbound -name with the name, excluding -. */
+    ArgumentParser& setUnknownShortHandler(ArgumentHandler handler) {
+        return setHandler(m_unknownShortHandler, std::move(handler));
     }
 
-    /** @brief Handle unbound --key=value options; unchanged cursors advance by one afterward. */
-    ArgumentParser& setUnknownOptionHandler(Handler handler) {
-        return setHandler(ArgumentKind::Option, std::move(handler));
+    /** @brief Handle --key=value with a prefix-free key and the value after the first =. */
+    ArgumentParser& setUnknownOptionHandler(OptionHandler handler) {
+        return setHandler(m_unknownOptionHandler, std::move(handler));
     }
 
     /** @brief Handle -- and its tail; the cursor initially points at -- and Parse then returns. */
-    ArgumentParser& setTerminatorHandler(Handler handler) {
-        return setHandler(ArgumentKind::Terminator, std::move(handler));
+    ArgumentParser& setTerminatorHandler(TerminatorHandler handler) {
+        return setHandler(m_terminatorHandler, std::move(handler));
     }
 
     /**
      * @brief Parse using the first matching option, then positional binding.
-     * @throws ParserUnboundArgumentError For an unbound argument without a handler.
+     * @throws ParserUnboundArgumentError From any default handler, including --.
      * @throws ParserMissingValueError For a short option without a value.
      * @throws ParserMissingArgumentError If any required binding received no values.
      * @throws ParserInvalidValueError For an invalid built-in value.
@@ -287,18 +290,17 @@ public:
      * @note Conversion exceptions propagate. Earlier assignments remain on failure;
      *       calling Parse again reapplies assignments and appends multi-values again.
      *       Short values consume the next argument even if it begins with '-',
-     *       except for the standalone -- terminator. At --, parsing stops even
-     *       without a terminator handler; minimum counts are not checked.
-     *       Unknown handlers may advance current; unchanged cursors advance by
-     *       one argument automatically. Handler exceptions propagate.
+     *       except for the standalone -- terminator. At --, the terminator
+     *       handler takes over and Parse returns without checking minimum counts.
+     *       Ordinary unknown handlers receive views and parsing then advances
+     *       by one argument. All defaults throw; handler exceptions propagate.
      */
     void Parse() const {
         Vector<std::size_t> counts(m_bindings.size(), 0);
         auto current = m_begin;
         while (current != m_end) {
             if (*current == "--") {
-                const auto& handler = m_handlers[static_cast<std::size_t>(ArgumentKind::Terminator)];
-                if (handler) handler(current, m_end);
+                m_terminatorHandler(current, m_end);
                 return;
             }
             bool matched = false;
@@ -310,7 +312,10 @@ public:
                     break;
                 }
             }
-            if (!matched) HandleUnknown(current);
+            if (!matched) {
+                HandleUnknown(*current);
+                ++current;
+            }
         }
         for (std::size_t i = 0; i < m_bindings.size(); ++i) {
             if (counts[i] < m_bindings[i].minimum) throw ParserMissingArgumentError();
@@ -415,24 +420,47 @@ private:
         return ArgumentKind::Positional;
     }
 
-    ArgumentParser& setHandler(ArgumentKind kind, Handler handler) {
-        m_handlers[static_cast<std::size_t>(kind)] = std::move(handler);
+    template <typename Callback>
+    static Callback DefaultHandler() {
+        return [](auto&&...) { throw ParserUnboundArgumentError(); };
+    }
+
+    template <typename Callback>
+    ArgumentParser& setHandler(Callback& target, Callback handler) {
+        target = handler ? std::move(handler) : DefaultHandler<Callback>();
         return *this;
     }
 
-    void HandleUnknown(Iterator& current) const {
-        const auto& handler = m_handlers[static_cast<std::size_t>(Classify(*current))];
-        if (!handler) throw ParserUnboundArgumentError();
-        const auto previous = current;
-        handler(current, m_end);
-        if (current == previous) ++current;
+    void HandleUnknown(StringView argument) const {
+        switch (Classify(argument)) {
+        case ArgumentKind::Positional:
+            m_unknownPositionalHandler(argument);
+            return;
+        case ArgumentKind::Switch:
+            m_unknownSwitchHandler(argument.substr(2));
+            return;
+        case ArgumentKind::Short:
+            m_unknownShortHandler(argument.substr(1));
+            return;
+        case ArgumentKind::Option: {
+            const auto separator = argument.find('=');
+            m_unknownOptionHandler(argument.substr(2, separator - 2), argument.substr(separator + 1));
+            return;
+        }
+        case ArgumentKind::Terminator:
+            throw ParserUnboundArgumentError();
+        }
     }
 
     Iterator m_begin;
     Iterator m_end;
     Vector<Binding> m_bindings;
     std::size_t m_optionBindings = 0;
-    std::array<Handler, 5> m_handlers;
+    ArgumentHandler m_unknownPositionalHandler = DefaultHandler<ArgumentHandler>();
+    ArgumentHandler m_unknownSwitchHandler = DefaultHandler<ArgumentHandler>();
+    ArgumentHandler m_unknownShortHandler = DefaultHandler<ArgumentHandler>();
+    OptionHandler m_unknownOptionHandler = DefaultHandler<OptionHandler>();
+    TerminatorHandler m_terminatorHandler = DefaultHandler<TerminatorHandler>();
 };
 
 LCORE_NAMESPACE_END
