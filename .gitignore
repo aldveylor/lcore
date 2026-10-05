@@ -24,3 +24,8 @@ include/lcore/config.h
 
 # clang
 .cache
+
+# Agent
+AGENTS.md
+AGENTS
+*.agent.md
