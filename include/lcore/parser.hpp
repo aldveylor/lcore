@@ -2,6 +2,7 @@
 #include "string.hpp"
 #include "exception.hpp"
 #include "container/vector.hpp"
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <cstddef>
@@ -13,11 +14,11 @@
 
 LCORE_NAMESPACE_BEGIN
 
-/** @brief Invalid argc/argv supplied to ArgvIterator. */
+/** @brief Invalid iterator input or an empty option name. */
 class ParserInvalidInputError final: public Exception {
 public:
     /** @brief Return the fixed diagnostic for invalid iterator input. */
-    const char* what() const noexcept override { return "ArgumentParser: invalid argc/argv"; }
+    const char* what() const noexcept override { return "ArgumentParser: invalid input"; }
 };
 
 /** @brief An argument has no matching registered binding. */
@@ -148,9 +149,9 @@ struct ParserDeserializer<bool> {
  *       take priority over positional bindings, including for negative numbers.
  *       Positional Bind<T> and BindOptional<T> each consume at most one value,
  *       in registration order; BindMulti<T> consumes remaining positional values.
- *       A standalone -- disables option matching from that argument onward;
- *       -- itself and subsequent arguments are positional values, distributed
- *       according to positional binding capacities.
+ *       Names are copied during binding. Unknown arguments are dispatched to
+ *       handlers by syntax. A standalone -- invokes the terminator handler and
+ *       returns immediately without parsing the tail or validating minima.
  *       Single-value Bind and BindShort require at least one value per Parse;
  *       optional, switch and multi bindings accept zero values.
  */
@@ -158,6 +159,9 @@ template <typename Iterator = ArgvIterator>
 requires std::same_as<typename Iterator::value_type, StringView>
 class ArgumentParser {
 public:
+    /** @brief Callback receiving the current argument and the range's end iterator. */
+    using Handler = std::function<void(Iterator&, Iterator)>;
+
     /** @brief Construct from the half-open argument range [begin, end). */
     ArgumentParser(Iterator begin, Iterator end): m_begin(std::move(begin)), m_end(std::move(end)) {}
 
@@ -248,9 +252,34 @@ public:
         });
     }
 
+    /** @brief Handle unbound positional values; unchanged cursors advance by one afterward. */
+    ArgumentParser& setUnknownPositionalHandler(Handler handler) {
+        return setHandler(ArgumentKind::Positional, std::move(handler));
+    }
+
+    /** @brief Handle unbound --name switches; unchanged cursors advance by one afterward. */
+    ArgumentParser& setUnknownSwitchHandler(Handler handler) {
+        return setHandler(ArgumentKind::Switch, std::move(handler));
+    }
+
+    /** @brief Handle unbound -name options; the callback may consume following values. */
+    ArgumentParser& setUnknownShortHandler(Handler handler) {
+        return setHandler(ArgumentKind::Short, std::move(handler));
+    }
+
+    /** @brief Handle unbound --key=value options; unchanged cursors advance by one afterward. */
+    ArgumentParser& setUnknownOptionHandler(Handler handler) {
+        return setHandler(ArgumentKind::Option, std::move(handler));
+    }
+
+    /** @brief Handle -- and its tail; the cursor initially points at -- and Parse then returns. */
+    ArgumentParser& setTerminatorHandler(Handler handler) {
+        return setHandler(ArgumentKind::Terminator, std::move(handler));
+    }
+
     /**
      * @brief Parse using the first matching option, then positional binding.
-     * @throws ParserUnboundArgumentError For an unbound argument.
+     * @throws ParserUnboundArgumentError For an unbound argument without a handler.
      * @throws ParserMissingValueError For a short option without a value.
      * @throws ParserMissingArgumentError If any required binding received no values.
      * @throws ParserInvalidValueError For an invalid built-in value.
@@ -258,26 +287,30 @@ public:
      * @note Conversion exceptions propagate. Earlier assignments remain on failure;
      *       calling Parse again reapplies assignments and appends multi-values again.
      *       Short values consume the next argument even if it begins with '-',
-     *       except for the standalone -- positional marker.
+     *       except for the standalone -- terminator. At --, parsing stops even
+     *       without a terminator handler; minimum counts are not checked.
+     *       Unknown handlers may advance current; unchanged cursors advance by
+     *       one argument automatically. Handler exceptions propagate.
      */
     void Parse() const {
         Vector<std::size_t> counts(m_bindings.size(), 0);
         auto current = m_begin;
-        bool positionalOnly = false;
         while (current != m_end) {
-            if (!positionalOnly && *current == "--") {
-                positionalOnly = true;
+            if (*current == "--") {
+                const auto& handler = m_handlers[static_cast<std::size_t>(ArgumentKind::Terminator)];
+                if (handler) handler(current, m_end);
+                return;
             }
             bool matched = false;
-            for (std::size_t i = positionalOnly ? m_optionBindings : 0; i < m_bindings.size(); ++i) {
+            for (std::size_t i = 0; i < m_bindings.size(); ++i) {
                 if (counts[i] >= m_bindings[i].maximum) continue;
-                if (m_bindings[i].parse(current, positionalOnly)) {
+                if (m_bindings[i].parse(current)) {
                     ++counts[i];
                     matched = true;
                     break;
                 }
             }
-            if (!matched) throw ParserUnboundArgumentError();
+            if (!matched) HandleUnknown(current);
         }
         for (std::size_t i = 0; i < m_bindings.size(); ++i) {
             if (counts[i] < m_bindings[i].minimum) throw ParserMissingArgumentError();
@@ -285,9 +318,12 @@ public:
     }
 
 private:
+    /** @brief Syntax categories used to select an unknown-argument handler. */
+    enum class ArgumentKind { Positional, Switch, Short, Option, Terminator };
+
     /** @brief Iterator callback with minimum and maximum numbers of accepted values. */
     struct Binding {
-        std::function<bool(Iterator&, bool)> parse;
+        std::function<bool(Iterator&)> parse;
         std::size_t minimum;
         std::size_t maximum;
     };
@@ -308,7 +344,7 @@ private:
     template <bool Required, typename Assign>
     ArgumentParser& BindValue(StringView name, Assign assign) {
         if (name.empty()) throw ParserInvalidInputError();
-        return RegisterBinding<false, Required>([name = String(name), assign = std::move(assign)](Iterator& current, bool) {
+        return RegisterBinding<false, Required>([name = String(name), assign = std::move(assign)](Iterator& current) {
             const StringView argument = *current;
             const auto separator = argument.find('=');
             if (!argument.starts_with("--") || separator == StringView::npos
@@ -323,9 +359,9 @@ private:
     ArgumentParser& BindPositionalValue(Assign assign) {
         constexpr std::size_t maximum = Multi ? std::numeric_limits<std::size_t>::max() : 1;
         return RegisterBinding<true, Required, maximum>(
-            [assign = std::move(assign)](Iterator& current, bool positionalOnly) {
+            [assign = std::move(assign)](Iterator& current) {
             const StringView argument = *current;
-            if (!positionalOnly && argument.starts_with("--")) return false;
+            if (Classify(argument) != ArgumentKind::Positional) return false;
             assign(argument);
             ++current;
             return true;
@@ -335,7 +371,7 @@ private:
     template <bool Short>
     ArgumentParser& BindOptionSwitch(StringView name, bool& target) {
         if (name.empty()) throw ParserInvalidInputError();
-        return RegisterBinding<false, false>([name = String(name), &target](Iterator& current, bool) {
+        return RegisterBinding<false, false>([name = String(name), &target](Iterator& current) {
             if (!MatchesOption(*current, name, Short)) return false;
             target = true;
             ++current;
@@ -347,7 +383,7 @@ private:
     ArgumentParser& BindShortValue(StringView name, Assign assign) {
         if (name.empty()) throw ParserInvalidInputError();
         return RegisterBinding<false, Required>(
-            [name = String(name), assign = std::move(assign), end = m_end](Iterator& current, bool) {
+            [name = String(name), assign = std::move(assign), end = m_end](Iterator& current) {
             if (!MatchesOption(*current, name, true)) return false;
             auto value = current;
             ++value;
@@ -366,10 +402,37 @@ private:
             && argument.substr(prefix) == name;
     }
 
+    static ArgumentKind Classify(StringView argument) noexcept {
+        if (argument == "--") return ArgumentKind::Terminator;
+        if (argument.starts_with("--")) {
+            return argument.find('=') == StringView::npos ? ArgumentKind::Switch : ArgumentKind::Option;
+        }
+        if (argument.size() > 1 && argument[0] == '-') {
+            const bool negativeNumber = (argument[1] >= '0' && argument[1] <= '9')
+                || (argument.size() > 2 && argument[1] == '.' && argument[2] >= '0' && argument[2] <= '9');
+            if (!negativeNumber) return ArgumentKind::Short;
+        }
+        return ArgumentKind::Positional;
+    }
+
+    ArgumentParser& setHandler(ArgumentKind kind, Handler handler) {
+        m_handlers[static_cast<std::size_t>(kind)] = std::move(handler);
+        return *this;
+    }
+
+    void HandleUnknown(Iterator& current) const {
+        const auto& handler = m_handlers[static_cast<std::size_t>(Classify(*current))];
+        if (!handler) throw ParserUnboundArgumentError();
+        const auto previous = current;
+        handler(current, m_end);
+        if (current == previous) ++current;
+    }
+
     Iterator m_begin;
     Iterator m_end;
     Vector<Binding> m_bindings;
     std::size_t m_optionBindings = 0;
+    std::array<Handler, 5> m_handlers;
 };
 
 LCORE_NAMESPACE_END
