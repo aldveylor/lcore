@@ -142,13 +142,13 @@ struct ParserDeserializer<bool> {
 /**
  * @brief Parse command-line arguments into bound references using dynamic names.
  * @tparam Iterator Copyable iterator with value_type equal to StringView.
- * @note Arguments and bound targets must outlive parsing; targets
+ * @note Argument strings, option name storage and bound targets must outlive parsing; targets
  *       storing StringView also borrow the argument strings. Named options use
  *       --name=value or -n value; switches use --name or -n. Arguments are
  *       matched by category and name; negative numbers are positional.
  *       Positional Bind<T> and BindOptional<T> each consume at most one value,
  *       in registration order; BindMulti<T> consumes remaining positional values.
- *       Names are copied during binding. Unknown arguments are dispatched to
+ *       Names are borrowed during binding. Unknown arguments are dispatched to
  *       handlers by syntax. A standalone -- invokes the terminator handler and
  *       returns immediately without parsing the tail or validating minima.
  *       Single-value Bind and BindShort require at least one value per Parse;
@@ -333,7 +333,7 @@ private:
     /** @brief Binding metadata and a typed value writer; parsing belongs to Parse. */
     struct Binding {
         ArgumentKind kind;
-        String name;
+        StringView name;
         std::size_t minimum;
         std::size_t maximum;
         std::function<void(StringView)> assign;
@@ -342,7 +342,7 @@ private:
     template <bool Required, std::size_t Maximum = std::numeric_limits<std::size_t>::max(), typename Assign>
     ArgumentParser& RegisterBinding(ArgumentKind kind, StringView name, Assign assign) {
         if (kind != ArgumentKind::Positional && name.empty()) throw ParserInvalidInputError();
-        m_bindings.push_back(Binding{kind, String(name), Required ? 1u : 0u, Maximum, std::move(assign)});
+        m_bindings.push_back(Binding{kind, name, Required ? 1u : 0u, Maximum, std::move(assign)});
         return *this;
     }
 
@@ -353,7 +353,7 @@ private:
             if (binding.kind != kind && !(kind == ArgumentKind::Short && binding.kind == ArgumentKind::ShortSwitch)) {
                 continue;
             }
-            if (kind == ArgumentKind::Positional || StringView(binding.name) == name) return i;
+            if (kind == ArgumentKind::Positional || binding.name == name) return i;
         }
         return m_bindings.size();
     }
