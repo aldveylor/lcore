@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <functional>
 #include <iterator>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -191,6 +192,8 @@ private:
  *       take priority over positional bindings, including for negative numbers.
  *       Bind<T> and BindMulti<T> bind positional arguments and consume all
  *       arguments following a standalone --.
+ *       Single-value Bind and BindShort require at least one value per Parse;
+ *       optional, switch and multi bindings accept zero values.
  */
 template <typename Iterator = ArgvIterator>
 requires std::same_as<typename Iterator::value_type, StringView>
@@ -204,37 +207,54 @@ public:
     requires requires(Iterator iterator) { { iterator.end() } -> std::same_as<Iterator>; }
         : ArgumentParser(begin, begin.end()) {}
 
-    /** @brief Bind positional arguments to a reference; repeated matches replace its value. */
+    /** @brief Bind required positional arguments; repeated matches replace the reference value. */
     template <typename T>
     ArgumentParser& Bind(T& target) {
-        return BindPositionalValue([&target](StringView value) {
+        return BindPositionalValue<true>([&target](StringView value) {
             target = ParserDeserializer<T>{}.deserialize(value);
         });
     }
 
-    /** @brief Bind positional arguments to a container; append without clearing it. */
+    /** @brief Bind zero or more positional arguments; append without clearing the container. */
     template <typename T, typename Container = Vector<T>>
     ArgumentParser& BindMulti(Container& target) {
-        return BindPositionalValue([&target](StringView value) {
+        return BindPositionalValue<false>([&target](StringView value) {
             target.push_back(ParserDeserializer<T>{}.deserialize(value));
         });
     }
 
-    /** @brief Bind a named option to a reference; repeated matches replace its value. */
+    /** @brief Bind a required named option; repeated matches replace the reference value. */
     template <StringConstant Name, typename T>
     requires (Name.size() > 0)
     ArgumentParser& Bind(T& target) {
-        return BindValue<Name>([&target](StringView value) {
+        return BindValue<Name, true>([&target](StringView value) {
             target = ParserDeserializer<T>{}.deserialize(value);
         });
     }
 
-    /** @brief Bind a named option to a container; append without clearing it. */
+    /** @brief Bind zero or more named option values; append without clearing the container. */
     template <StringConstant Name, typename T, typename Container = Vector<T>>
     requires (Name.size() > 0)
     ArgumentParser& BindMulti(Container& target) {
-        return BindValue<Name>([&target](StringView value) {
+        return BindValue<Name, false>([&target](StringView value) {
             target.push_back(ParserDeserializer<T>{}.deserialize(value));
+        });
+    }
+
+    /** @brief Bind optional positional arguments; preserve the reference when absent. */
+    template <typename T>
+    ArgumentParser& BindOptional(T& target) {
+        return BindPositionalValue<false>([&target](StringView value) {
+            target = ParserDeserializer<T>{}.deserialize(value);
+        });
+    }
+
+    /** @brief Bind an optional named option; preserve the reference when absent. */
+    template <StringConstant Name, typename T>
+    requires (Name.size() > 0)
+    ArgumentParser& BindOptional(T& target) {
+        return BindValue<Name, false>([&target](StringView value) {
+            target = ParserDeserializer<T>{}.deserialize(value);
         });
     }
 
@@ -250,19 +270,27 @@ public:
         return BindOptionSwitch<Name, true>(target);
     }
 
-    /** @brief Bind -n value to a reference; repeated matches replace its value. */
+    /** @brief Bind a required -n value; repeated matches replace the reference value. */
     template <StringConstant Name, typename T>
     ArgumentParser& BindShort(T& target) {
-        return BindShortValue<Name>([&target](StringView value) {
+        return BindShortValue<Name, true>([&target](StringView value) {
             target = ParserDeserializer<T>{}.deserialize(value);
         });
     }
 
-    /** @brief Bind -n value to a container; append each deserialized value. */
+    /** @brief Bind zero or more -n values; append each deserialized value to the container. */
     template <StringConstant Name, typename T, typename Container = Vector<T>>
     ArgumentParser& BindShortMulti(Container& target) {
-        return BindShortValue<Name>([&target](StringView value) {
+        return BindShortValue<Name, false>([&target](StringView value) {
             target.push_back(ParserDeserializer<T>{}.deserialize(value));
+        });
+    }
+
+    /** @brief Bind an optional -n value; preserve the reference when absent. */
+    template <StringConstant Name, typename T>
+    ArgumentParser& BindShortOptional(T& target) {
+        return BindShortValue<Name, false>([&target](StringView value) {
+            target = ParserDeserializer<T>{}.deserialize(value);
         });
     }
 
@@ -270,6 +298,7 @@ public:
      * @brief Parse using the first matching option, then positional binding.
      * @throws ParserUnboundArgumentError For an unbound argument.
      * @throws ParserMissingValueError For a short option without a value.
+     * @throws ParserMissingArgumentError If any required binding received no values.
      * @throws ParserInvalidValueError For an invalid built-in value.
      * @throws ParserValueOutOfRangeError For a built-in numeric overflow.
      * @note Conversion exceptions propagate. Earlier assignments remain on failure;
@@ -277,22 +306,34 @@ public:
      *       Short values consume the next argument even if it begins with '-'.
      */
     void Parse() const {
+        Vector<std::size_t> counts(m_bindings.size(), 0);
         auto current = m_begin;
         while (current != m_end) {
             bool matched = false;
-            for (const auto& binding: m_bindings) {
-                if (binding(current)) {
+            for (std::size_t i = 0; i < m_bindings.size(); ++i) {
+                if (auto count = m_bindings[i].parse(current)) {
+                    counts[i] += *count;
                     matched = true;
                     break;
                 }
             }
             if (!matched) throw ParserUnboundArgumentError();
         }
+        for (std::size_t i = 0; i < m_bindings.size(); ++i) {
+            if (counts[i] < m_bindings[i].minimum) throw ParserMissingArgumentError();
+        }
     }
 
 private:
-    template <bool Positional, typename Binding>
-    ArgumentParser& RegisterBinding(Binding binding) {
+    /** @brief Iterator callback and minimum number of values required for a binding. */
+    struct Binding {
+        std::function<std::optional<std::size_t>(Iterator&)> parse;
+        std::size_t minimum;
+    };
+
+    template <bool Positional, bool Required, typename Callback>
+    ArgumentParser& RegisterBinding(Callback callback) {
+        Binding binding{std::move(callback), Required ? 1u : 0u};
         if constexpr (Positional) {
             m_bindings.emplace_back(std::move(binding));
         } else {
@@ -302,64 +343,69 @@ private:
         return *this;
     }
 
-    template <StringConstant Name, typename Assign>
+    template <StringConstant Name, bool Required, typename Assign>
     ArgumentParser& BindValue(Assign assign) {
-        return RegisterBinding<false>([assign = std::move(assign)](Iterator& current) {
+        return RegisterBinding<false, Required>([assign = std::move(assign)](Iterator& current)
+            -> std::optional<std::size_t> {
             StringView value;
-            if (!detail::ParserArgumentMatcher<Name>::Match(*current, value)) return false;
+            if (!detail::ParserArgumentMatcher<Name>::Match(*current, value)) return std::nullopt;
             assign(value);
             ++current;
-            return true;
+            return 1;
         });
     }
 
-    template <typename Assign>
+    template <bool Required, typename Assign>
     ArgumentParser& BindPositionalValue(Assign assign) {
-        return RegisterBinding<true>([assign = std::move(assign), end = m_end](Iterator& current) {
-            if (current == end) return false;
+        return RegisterBinding<true, Required>([assign = std::move(assign), end = m_end](Iterator& current)
+            -> std::optional<std::size_t> {
+            if (current == end) return std::nullopt;
             const StringView argument = *current;
             if (argument == "--") {
                 ++current;
+                std::size_t count = 0;
                 while (current != end) {
                     assign(*current);
                     ++current;
+                    ++count;
                 }
-                return true;
+                return count;
             }
-            if (argument.starts_with("--")) return false;
+            if (argument.starts_with("--")) return std::nullopt;
             assign(argument);
             ++current;
-            return true;
+            return 1;
         });
     }
 
     template <StringConstant Name, bool Short>
     ArgumentParser& BindOptionSwitch(bool& target) {
-        return RegisterBinding<false>([&target](Iterator& current) {
-            if (!detail::ParserOptionMatcher<Name, Short>::Match(*current)) return false;
+        return RegisterBinding<false, false>([&target](Iterator& current) -> std::optional<std::size_t> {
+            if (!detail::ParserOptionMatcher<Name, Short>::Match(*current)) return std::nullopt;
             target = true;
             ++current;
-            return true;
+            return 1;
         });
     }
 
-    template <StringConstant Name, typename Assign>
+    template <StringConstant Name, bool Required, typename Assign>
     ArgumentParser& BindShortValue(Assign assign) {
-        return RegisterBinding<false>([assign = std::move(assign), end = m_end](Iterator& current) {
-            if (!detail::ParserOptionMatcher<Name, true>::Match(*current)) return false;
+        return RegisterBinding<false, Required>([assign = std::move(assign), end = m_end](Iterator& current)
+            -> std::optional<std::size_t> {
+            if (!detail::ParserOptionMatcher<Name, true>::Match(*current)) return std::nullopt;
             auto value = current;
             ++value;
             if (value == end) throw ParserMissingValueError();
             assign(*value);
             ++value;
             current = std::move(value);
-            return true;
+            return 1;
         });
     }
 
     Iterator m_begin;
     Iterator m_end;
-    Vector<std::function<bool(Iterator&)>> m_bindings;
+    Vector<Binding> m_bindings;
     std::size_t m_optionBindings = 0;
 };
 
