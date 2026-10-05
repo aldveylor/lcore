@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <functional>
 #include <iterator>
-#include <optional>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -190,8 +190,11 @@ private:
  *       storing StringView also borrow the argument strings. Named options use
  *       --name=value or -n value; switches use --name or -n. Registered options
  *       take priority over positional bindings, including for negative numbers.
- *       Bind<T> and BindMulti<T> bind positional arguments and consume all
- *       arguments following a standalone --.
+ *       Positional Bind<T> and BindOptional<T> each consume at most one value,
+ *       in registration order; BindMulti<T> consumes remaining positional values.
+ *       A standalone -- disables option matching from that argument onward;
+ *       -- itself and subsequent arguments are positional values, distributed
+ *       according to positional binding capacities.
  *       Single-value Bind and BindShort require at least one value per Parse;
  *       optional, switch and multi bindings accept zero values.
  */
@@ -207,7 +210,7 @@ public:
     requires requires(Iterator iterator) { { iterator.end() } -> std::same_as<Iterator>; }
         : ArgumentParser(begin, begin.end()) {}
 
-    /** @brief Bind required positional arguments; repeated matches replace the reference value. */
+    /** @brief Bind exactly one positional argument to a reference. */
     template <typename T>
     ArgumentParser& Bind(T& target) {
         return BindPositionalValue<true>([&target](StringView value) {
@@ -218,7 +221,7 @@ public:
     /** @brief Bind zero or more positional arguments; append without clearing the container. */
     template <typename T, typename Container = Vector<T>>
     ArgumentParser& BindMulti(Container& target) {
-        return BindPositionalValue<false>([&target](StringView value) {
+        return BindPositionalValue<false, true>([&target](StringView value) {
             target.push_back(ParserDeserializer<T>{}.deserialize(value));
         });
     }
@@ -241,7 +244,7 @@ public:
         });
     }
 
-    /** @brief Bind optional positional arguments; preserve the reference when absent. */
+    /** @brief Bind at most one positional argument; preserve the reference when absent. */
     template <typename T>
     ArgumentParser& BindOptional(T& target) {
         return BindPositionalValue<false>([&target](StringView value) {
@@ -303,16 +306,22 @@ public:
      * @throws ParserValueOutOfRangeError For a built-in numeric overflow.
      * @note Conversion exceptions propagate. Earlier assignments remain on failure;
      *       calling Parse again reapplies assignments and appends multi-values again.
-     *       Short values consume the next argument even if it begins with '-'.
+     *       Short values consume the next argument even if it begins with '-',
+     *       except for the standalone -- positional marker.
      */
     void Parse() const {
         Vector<std::size_t> counts(m_bindings.size(), 0);
         auto current = m_begin;
+        bool positionalOnly = false;
         while (current != m_end) {
+            if (!positionalOnly && *current == "--") {
+                positionalOnly = true;
+            }
             bool matched = false;
-            for (std::size_t i = 0; i < m_bindings.size(); ++i) {
-                if (auto count = m_bindings[i].parse(current)) {
-                    counts[i] += *count;
+            for (std::size_t i = positionalOnly ? m_optionBindings : 0; i < m_bindings.size(); ++i) {
+                if (counts[i] >= m_bindings[i].maximum) continue;
+                if (m_bindings[i].parse(current, positionalOnly)) {
+                    ++counts[i];
                     matched = true;
                     break;
                 }
@@ -325,15 +334,17 @@ public:
     }
 
 private:
-    /** @brief Iterator callback and minimum number of values required for a binding. */
+    /** @brief Iterator callback with minimum and maximum numbers of accepted values. */
     struct Binding {
-        std::function<std::optional<std::size_t>(Iterator&)> parse;
+        std::function<bool(Iterator&, bool)> parse;
         std::size_t minimum;
+        std::size_t maximum;
     };
 
-    template <bool Positional, bool Required, typename Callback>
+    template <bool Positional, bool Required,
+        std::size_t Maximum = std::numeric_limits<std::size_t>::max(), typename Callback>
     ArgumentParser& RegisterBinding(Callback callback) {
-        Binding binding{std::move(callback), Required ? 1u : 0u};
+        Binding binding{std::move(callback), Required ? 1u : 0u, Maximum};
         if constexpr (Positional) {
             m_bindings.emplace_back(std::move(binding));
         } else {
@@ -345,61 +356,49 @@ private:
 
     template <StringConstant Name, bool Required, typename Assign>
     ArgumentParser& BindValue(Assign assign) {
-        return RegisterBinding<false, Required>([assign = std::move(assign)](Iterator& current)
-            -> std::optional<std::size_t> {
+        return RegisterBinding<false, Required>([assign = std::move(assign)](Iterator& current, bool) {
             StringView value;
-            if (!detail::ParserArgumentMatcher<Name>::Match(*current, value)) return std::nullopt;
+            if (!detail::ParserArgumentMatcher<Name>::Match(*current, value)) return false;
             assign(value);
             ++current;
-            return 1;
+            return true;
         });
     }
 
-    template <bool Required, typename Assign>
+    template <bool Required, bool Multi = false, typename Assign>
     ArgumentParser& BindPositionalValue(Assign assign) {
-        return RegisterBinding<true, Required>([assign = std::move(assign), end = m_end](Iterator& current)
-            -> std::optional<std::size_t> {
-            if (current == end) return std::nullopt;
+        constexpr std::size_t maximum = Multi ? std::numeric_limits<std::size_t>::max() : 1;
+        return RegisterBinding<true, Required, maximum>(
+            [assign = std::move(assign)](Iterator& current, bool positionalOnly) {
             const StringView argument = *current;
-            if (argument == "--") {
-                ++current;
-                std::size_t count = 0;
-                while (current != end) {
-                    assign(*current);
-                    ++current;
-                    ++count;
-                }
-                return count;
-            }
-            if (argument.starts_with("--")) return std::nullopt;
+            if (!positionalOnly && argument.starts_with("--")) return false;
             assign(argument);
             ++current;
-            return 1;
+            return true;
         });
     }
 
     template <StringConstant Name, bool Short>
     ArgumentParser& BindOptionSwitch(bool& target) {
-        return RegisterBinding<false, false>([&target](Iterator& current) -> std::optional<std::size_t> {
-            if (!detail::ParserOptionMatcher<Name, Short>::Match(*current)) return std::nullopt;
+        return RegisterBinding<false, false>([&target](Iterator& current, bool) {
+            if (!detail::ParserOptionMatcher<Name, Short>::Match(*current)) return false;
             target = true;
             ++current;
-            return 1;
+            return true;
         });
     }
 
     template <StringConstant Name, bool Required, typename Assign>
     ArgumentParser& BindShortValue(Assign assign) {
-        return RegisterBinding<false, Required>([assign = std::move(assign), end = m_end](Iterator& current)
-            -> std::optional<std::size_t> {
-            if (!detail::ParserOptionMatcher<Name, true>::Match(*current)) return std::nullopt;
+        return RegisterBinding<false, Required>([assign = std::move(assign), end = m_end](Iterator& current, bool) {
+            if (!detail::ParserOptionMatcher<Name, true>::Match(*current)) return false;
             auto value = current;
             ++value;
-            if (value == end) throw ParserMissingValueError();
+            if (value == end || *value == "--") throw ParserMissingValueError();
             assign(*value);
             ++value;
             current = std::move(value);
-            return 1;
+            return true;
         });
     }
 
